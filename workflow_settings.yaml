@@ -2,7 +2,7 @@ defaultProject: example-silver-project
 defaultLocation: asia-southeast1
 defaultDataset: silver_curated
 defaultAssertionDataset: silver_assertions
-dataformCoreVersion: 3.0.43
+dataformCoreVersion: 3.1.5
 vars:
   bronze_project: example-bronze-project
   bronze_dataset: bronze_raw

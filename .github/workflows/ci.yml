@@ -32,10 +32,10 @@ jobs:
 
           pkg = json.loads(Path("package.json").read_text(encoding="utf-8"))
           assert pkg["name"] == "gcp-data-medallion"
-          assert pkg["dependencies"]["@dataform/core"] == "3.0.43"
+          assert pkg["dependencies"]["@dataform/core"] == "3.1.5"
 
           wf = parse_workflow_settings(Path("workflow_settings.yaml").read_text(encoding="utf-8"))
-          assert wf["dataformCoreVersion"] == "3.0.43"
+          assert wf["dataformCoreVersion"] == "3.1.5"
           for key in REQUIRED_VARS:
               assert key in wf["vars"], f"Missing var {key}"
           print("Schema checks passed.")

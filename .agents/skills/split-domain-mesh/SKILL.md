@@ -5,7 +5,7 @@ description: Recipe for splitting a Gold domain folder into an independent Data 
 
 # Split a Gold Domain Into a Data Mesh Repository
 
-Use this recipe when your engineering team exceeds 25 data engineers.
+Use this recipe when `CODEOWNERS` review load or DAG compile time becomes a bottleneck.
 
 ## 1. Provision the New Repository
 

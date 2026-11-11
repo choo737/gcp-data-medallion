@@ -4,20 +4,38 @@ This repository holds BigQuery Dataform SQLX models for a Bronze, Silver, and Go
 
 It pairs with [gcp-foundation](https://github.com/choo737/gcp-foundation) as the platform workload layer.
 
+## Create Your Private Repository
+
+GitHub forces normal forks of public repos to stay public.
+
+Click **Use this template** on GitHub or run this command:
+
+```bash
+gh repo create acme-corp/gcp-data-medallion --private --template choo737/gcp-data-medallion --clone
+```
+
 ## How This Pairs With gcp-foundation
 
 Terraform in `gcp-foundation` provisions the underlying Google Cloud platform infrastructure.
 
 - It creates the Bronze, Silver, and Gold GCP projects and BigQuery datasets.
-- It creates BigQuery Policy Tags for PII governance and slot reservations for compute.
+- It creates BigQuery Policy Tags for PII governance.
+- It provisions raw `google_bigquery_reservation` and `google_bigquery_reservation_assignment` resources in `modules/data/bigquery-reservations/`.
+- It provisions these resources directly instead of Cloud Foundation Fabric, which lacks a reservation module.
 - It creates a `google_dataform_repository` resource synced directly to this repository.
 - It passes target projects, datasets, and Policy Tag IDs into Dataform release configs.
+
+## Why Dataform Over dbt
+
+Dataform runs natively inside BigQuery Studio with no separate runtime or license cost.
+
+It integrates directly with BigQuery release configs, workflow configs, and Policy Tags.
 
 ## Root Configuration Layout
 
 BigQuery Dataform v3 requires `workflow_settings.yaml` at the repository root (`/`).
 
-Dataform reads this file first to set `dataformCoreVersion` (`3.0.43`), default dataset targets, and compilation `vars`.
+Dataform reads this file first to set `dataformCoreVersion` (`3.1.5`), default dataset targets, and compilation `vars`.
 
 ## Compilation Variables Contract
 
@@ -60,15 +78,28 @@ tests/            Hermetic Python integrity test suite
 
 Tables with `requirePartitionFilter: true` use standalone assertion `.sqlx` files (`assert_fct_orders_quality.sqlx`) with a partition predicate.
 
+## Who Creates Bronze Tables
+
+Files in `definitions/01_bronze/` are Dataform `declaration` blocks only.
+
+They never run DDL or create Bronze tables.
+
+| Ingestion Path | Who Creates the Bronze Table | Terraform? |
+| :--- | :--- | :--- |
+| Datastream (CDC) | Datastream, automatically | No |
+| Fivetran / Airbyte / SaaS ELT | The connector | No |
+| Dataflow / Spark | The job (create-if-needed) | No |
+| Batch loads from GCS | Load job or Dataform `operations` step | No |
+| Pub/Sub -> BigQuery subscription | Must exist before the subscription; create it in the same Terraform as the subscription (platform/streaming owner) | Yes |
+
 > [!NOTE]
-> **Scaling Beyond 25 Data Engineers (Data Mesh Split)**
+> **Scaling via Data Mesh Split**
 >
-> Teams with fewer than 25 data engineers should keep one `gcp-data-medallion` repository.
-> Use `CODEOWNERS` on `definitions/03_gold/<domain>/` so teams keep unified DAG lineage.
+> Keep one `gcp-data-medallion` repository with `CODEOWNERS` on `definitions/03_gold/<domain>/` for unified DAG lineage.
+> Split into domain repositories (`medallion-finance`, `medallion-retail`) when `CODEOWNERS` review load or DAG compile time becomes a bottleneck.
 >
-> Teams with more than 25 data engineers should split into domain repositories (`medallion-finance`, `medallion-retail`).
-> Terraform in `gcp-foundation` provisions one `google_dataform_repository` per domain repository.
-> Domain repositories consume upstream Silver tables through Dataform `declaration` blocks.
+> When splitting, Terraform in `gcp-foundation` provisions one `google_dataform_repository` per domain repository.
+> Each domain repository reads upstream Silver tables through Dataform `declaration` blocks.
 
 ## Local Validation
 

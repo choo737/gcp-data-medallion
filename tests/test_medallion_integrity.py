@@ -364,7 +364,7 @@ class MedallionIntegrityTest(unittest.TestCase):
             self.assertIn(key, workflow, f"Missing {key} in workflow_settings.yaml.")
             self.assertTrue(workflow[key], f"Empty {key} in workflow_settings.yaml.")
 
-        self.assertEqual(workflow["dataformCoreVersion"], "3.0.43")
+        self.assertEqual(workflow["dataformCoreVersion"], "3.1.5")
         vars_map = workflow["vars"]
         for var_name in REQUIRED_VARS:
             self.assertIn(var_name, vars_map, f"Missing contract var '{var_name}'.")
@@ -375,7 +375,7 @@ class MedallionIntegrityTest(unittest.TestCase):
         self.assertEqual(package_data.get("name"), "gcp-data-medallion")
         self.assertEqual(
             package_data.get("dependencies", {}).get("@dataform/core"),
-            "3.0.43",
+            "3.1.5",
         )
 
     def test_includes_helpers_present(self):
@@ -536,10 +536,20 @@ class MedallionIntegrityTest(unittest.TestCase):
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("https://github.com/choo737/gcp-foundation", readme)
         self.assertIn("workflow_settings.yaml", readme)
+        self.assertIn("3.1.5", readme)
         self.assertIn("> [!NOTE]", readme)
-        self.assertIn("25", readme)
+        self.assertIn("google_bigquery_reservation", readme)
+        self.assertIn("modules/data/bigquery-reservations/", readme)
+        self.assertIn("Who Creates Bronze Tables", readme)
+        self.assertIn("Why Dataform Over dbt", readme)
+        self.assertNotIn("25 data engineers", readme)
         for var_name in REQUIRED_VARS:
             self.assertIn(var_name, readme)
+
+        split_skill = (REPO_ROOT / ".agents/skills/split-domain-mesh/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("25 data engineers", split_skill)
 
     def test_markdown_prose_sentence_length(self):
         for rel_path in MARKDOWN_DOC_FILES:
