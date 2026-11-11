@@ -12,8 +12,8 @@ rules:
     threshold: 1.0
 
   - rangeExpectation:
-      minValue: 0
-      strictMin: false
+      minValue: "0"
+      strictMinEnabled: false
     column: net_amount
     dimension: ACCURACY
     description: "Net amount must be zero or positive."

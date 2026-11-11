@@ -8,15 +8,18 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   integrity:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -36,6 +39,50 @@ jobs:
           for key in REQUIRED_VARS:
               assert key in wf["vars"], f"Missing var {key}"
           print("Schema checks passed.")
+          EOF
+
+      - name: Run Node JS helper checks
+        run: |
+          node - << 'EOF'
+          const assert = require("assert");
+          const audit = require("./includes/audit_columns");
+          const policyTags = require("./includes/policy_tags");
+          const scd2 = require("./includes/scd_type2");
+
+          assert.strictEqual(audit.ingestedAtSql(), "CURRENT_TIMESTAMP()");
+          assert.strictEqual(
+            audit.recordHashSql(["order_id", "net_amount", "status"]),
+            "TO_HEX(SHA256(TO_JSON_STRING(STRUCT(order_id, net_amount, status))))"
+          );
+
+          global.dataform = { projectConfig: { vars: { pii_policy_tag: "", allow_untagged_pii: "true" } } };
+          assert.deepStrictEqual(policyTags.piiColumnConfig("Customer national ID"), {
+            description: "Customer national ID"
+          });
+
+          global.dataform = { projectConfig: { vars: { pii_policy_tag: "", allow_untagged_pii: "false" } } };
+          assert.throws(
+            () => policyTags.piiColumnConfig("Customer national ID"),
+            /pii_policy_tag is required/
+          );
+
+          const sampleTag = "projects/example-project/locations/asia-southeast1/taxonomies/111/policyTags/222";
+          global.dataform = { projectConfig: { vars: { pii_policy_tag: sampleTag, allow_untagged_pii: "false" } } };
+          assert.deepStrictEqual(policyTags.piiColumnConfig("Customer national ID"), {
+            description: "Customer national ID",
+            bigqueryPolicyTags: [sampleTag]
+          });
+
+          const scdSql = scd2.buildScd2Query({
+            sourceSql: "`example-bronze-project.bronze_raw.crm_customers_cdc`",
+            naturalKey: "customer_id",
+            orderByColumn: "updated_at",
+            columns: ["customer_id", "segment", "updated_at"]
+          });
+          assert(scdSql.includes("AS valid_from"));
+          assert(scdSql.includes("AS valid_to"));
+          assert(scdSql.includes("AS is_current"));
+          console.log("Node JS helper checks passed.");
           EOF
 
       - name: Run medallion integrity tests

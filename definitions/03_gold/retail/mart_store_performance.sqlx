@@ -1,7 +1,7 @@
 config {
   type: "table",
-  database: dataform.projectConfig.vars.gold_project,
-  schema: dataform.projectConfig.vars.gold_dataset,
+  database: dataform.projectConfig.vars.gold_retail_project || dataform.projectConfig.vars.gold_project,
+  schema: dataform.projectConfig.vars.gold_retail_dataset || dataform.projectConfig.vars.gold_dataset,
   description: "Daily retail store performance mart aggregated by date and store.",
   bigquery: {
     partitionBy: "order_date",

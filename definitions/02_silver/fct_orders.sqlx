@@ -8,11 +8,8 @@ config {
     partitionBy: "order_date",
     clusterBy: ["customer_id", "country_code"],
     requirePartitionFilter: true,
+    // Rolling 7-day target filter satisfies requirePartitionFilter during MERGE and covers the 3-day lookback.
     updatePartitionFilter: "order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)"
-  },
-  assertions: {
-    nonNull: ["order_id", "order_date", "customer_id"],
-    uniqueKey: ["order_id"]
   },
   columns: {
     order_id: "Unique POS order identifier.",

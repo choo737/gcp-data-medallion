@@ -16,7 +16,10 @@ REQUIRED_VARS = (
     "silver_dataset",
     "gold_project",
     "gold_dataset",
+    "gold_retail_project",
+    "gold_retail_dataset",
     "pii_policy_tag",
+    "allow_untagged_pii",
 )
 
 REQUIRED_FILES = (
@@ -37,6 +40,7 @@ REQUIRED_FILES = (
     "definitions/01_bronze/pos_orders_cdc.sqlx",
     "definitions/01_bronze/crm_customers_cdc.sqlx",
     "definitions/02_silver/fct_orders.sqlx",
+    "definitions/02_silver/assert_fct_orders_quality.sqlx",
     "definitions/02_silver/dim_customers.sqlx",
     "definitions/03_gold/finance/mart_daily_revenue.sqlx",
     "definitions/03_gold/retail/mart_store_performance.sqlx",
@@ -365,6 +369,7 @@ class MedallionIntegrityTest(unittest.TestCase):
         for var_name in REQUIRED_VARS:
             self.assertIn(var_name, vars_map, f"Missing contract var '{var_name}'.")
         self.assertEqual(vars_map["pii_policy_tag"], "")
+        self.assertEqual(vars_map["allow_untagged_pii"], "true")
 
         package_data = json.loads(package_path.read_text(encoding="utf-8"))
         self.assertEqual(package_data.get("name"), "gcp-data-medallion")
@@ -376,7 +381,7 @@ class MedallionIntegrityTest(unittest.TestCase):
     def test_includes_helpers_present(self):
         expected_exports = {
             "includes/audit_columns.js": ("ingestedAtSql", "recordHashSql"),
-            "includes/policy_tags.js": ("piiColumnConfig",),
+            "includes/policy_tags.js": ("allowUntaggedPii", "piiColumnConfig"),
             "includes/scd_type2.js": ("scd2WindowColumnsSql", "buildScd2Query"),
         }
         for rel_path, symbols in expected_exports.items():
@@ -389,7 +394,11 @@ class MedallionIntegrityTest(unittest.TestCase):
     def test_sqlx_definitions_and_layer_contracts(self):
         definitions_dir = REPO_ROOT / "definitions"
         sqlx_files = sorted(definitions_dir.rglob("*.sqlx"))
-        self.assertEqual(len(sqlx_files), 6, "Expected 2 Bronze, 2 Silver, and 2 Gold SQLX files.")
+        self.assertEqual(
+            len(sqlx_files),
+            7,
+            "Expected 2 Bronze, 2 Silver tables, 1 Silver assertion, and 2 Gold SQLX files.",
+        )
 
         for sqlx_path in sqlx_files:
             rel = sqlx_path.relative_to(REPO_ROOT).as_posix()
@@ -412,12 +421,59 @@ class MedallionIntegrityTest(unittest.TestCase):
                     "declaration",
                     f"{rel}: Bronze definitions must only use type 'declaration'.",
                 )
-            elif rel.startswith("definitions/02_silver/") or rel.startswith("definitions/03_gold/"):
+            elif rel.startswith("definitions/02_silver/"):
+                if model_type in ("table", "incremental"):
+                    requires_partition_filter = bool(
+                        re.search(r"\brequirePartitionFilter\s*:\s*true\b", config_body)
+                    )
+                    if requires_partition_filter:
+                        self.assertNotRegex(
+                            config_body,
+                            r"\bassertions\s*:\s*\{",
+                            f"{rel}: tables with requirePartitionFilter must not use inline assertions.",
+                        )
+                        part_match = re.search(
+                            r'\bpartitionBy\s*:\s*["\']([A-Za-z0-9_]+)["\']',
+                            config_body,
+                        )
+                        self.assertIsNotNone(part_match, f"{rel}: missing partitionBy column.")
+                        part_col = part_match.group(1)
+                        table_name = sqlx_path.stem
+                        custom_assertions = sorted(
+                            (REPO_ROOT / "definitions/02_silver").glob(f"assert_{table_name}_*.sqlx")
+                        )
+                        self.assertGreaterEqual(
+                            len(custom_assertions),
+                            1,
+                            f"{rel}: missing standalone assert_{table_name}_*.sqlx assertion.",
+                        )
+                        for assertion_path in custom_assertions:
+                            a_rel = assertion_path.relative_to(REPO_ROOT).as_posix()
+                            a_text = assertion_path.read_text(encoding="utf-8")
+                            a_cfg = extract_config_block(a_text, a_rel)
+                            self.assertRegex(
+                                a_cfg,
+                                r'\btype\s*:\s*["\']assertion["\']',
+                                f"{a_rel}: must use type 'assertion'.",
+                            )
+                            self.assertIn(f'${{ref("{table_name}")}}', a_text)
+                            self.assertRegex(
+                                strip_comments(a_text),
+                                rf"\bWHERE\b[\s\S]*\b{re.escape(part_col)}\b",
+                                f"{a_rel}: must filter on partition column '{part_col}'.",
+                            )
+                    else:
+                        self.assertRegex(
+                            config_body,
+                            r"\bassertions\s*:\s*\{",
+                            f"{rel}: Silver tables without requirePartitionFilter must define assertions.",
+                        )
+            elif rel.startswith("definitions/03_gold/"):
                 if model_type in ("table", "incremental"):
                     self.assertRegex(
                         config_body,
                         r"\bassertions\s*:\s*\{",
-                        f"{rel}: Silver and Gold tables must define assertions.",
+                        f"{rel}: Gold tables must define assertions.",
                     )
 
             if rel.startswith("definitions/03_gold/") and '${ref("fct_orders")}' in raw_text:
@@ -435,7 +491,20 @@ class MedallionIntegrityTest(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("scd_type2.", dim_customers)
-        self.assertIn("policy_tags.piiColumnConfig", dim_customers)
+        self.assertRegex(dim_customers, r"customer_name\s*:\s*policy_tags\.piiColumnConfig\(")
+        self.assertRegex(dim_customers, r"customer_ic_number\s*:\s*policy_tags\.piiColumnConfig\(")
+
+        retail_mart = (
+            REPO_ROOT / "definitions/03_gold/retail/mart_store_performance.sqlx"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "dataform.projectConfig.vars.gold_retail_project || dataform.projectConfig.vars.gold_project",
+            retail_mart,
+        )
+        self.assertIn(
+            "dataform.projectConfig.vars.gold_retail_dataset || dataform.projectConfig.vars.gold_dataset",
+            retail_mart,
+        )
 
     def test_quality_rules_and_governance_files(self):
         quality_text = (REPO_ROOT / "quality/silver_orders_quality.yaml").read_text(encoding="utf-8")
@@ -446,7 +515,8 @@ class MedallionIntegrityTest(unittest.TestCase):
             "order_date",
             "rangeExpectation",
             "net_amount",
-            "minValue: 0",
+            'minValue: "0"',
+            "strictMinEnabled: false",
         ):
             self.assertIn(expected, quality_text)
 
@@ -455,9 +525,13 @@ class MedallionIntegrityTest(unittest.TestCase):
         self.assertIn("/definitions/03_gold/retail/", codeowners)
 
         ci_text = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertRegex(ci_text, r"(?m)^permissions:\s*\n\s+contents:\s*read\b")
+        self.assertRegex(ci_text, r"actions/checkout@[0-9a-f]{40}")
+        self.assertRegex(ci_text, r"actions/setup-python@[0-9a-f]{40}")
         self.assertIn("python3 -m unittest discover -s tests -v", ci_text)
         self.assertIn("workflow_settings.yaml", ci_text)
         self.assertIn("package.json", ci_text)
+        self.assertIn("allow_untagged_pii", ci_text)
 
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("https://github.com/choo737/gcp-foundation", readme)

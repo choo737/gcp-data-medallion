@@ -21,7 +21,7 @@ Dataform reads this file first to set `dataformCoreVersion` (`3.0.43`), default 
 
 ## Compilation Variables Contract
 
-The seven variables in `workflow_settings.yaml` connect Terraform outputs to SQLX definitions.
+The ten variables in `workflow_settings.yaml` connect Terraform outputs to SQLX definitions.
 
 | Variable | Default Value | Purpose |
 | :--- | :--- | :--- |
@@ -31,18 +31,21 @@ The seven variables in `workflow_settings.yaml` connect Terraform outputs to SQL
 | `silver_dataset` | `silver_curated` | BigQuery dataset for Silver models |
 | `gold_project` | `example-gold-project` | GCP project holding Gold business marts |
 | `gold_dataset` | `gold_mart` | BigQuery dataset for Gold marts |
+| `gold_retail_project` | `""` | Optional isolated GCP project for Retail Gold marts |
+| `gold_retail_dataset` | `""` | Optional isolated BigQuery dataset for Retail Gold marts |
 | `pii_policy_tag` | `""` | Optional BigQuery Policy Tag resource name |
+| `allow_untagged_pii` | `"true"` | Set to `"false"` in production to require Policy Tags |
 
-When `pii_policy_tag` is `""`, `includes/policy_tags.js` returns only the column `description`.
+When `allow_untagged_pii` is `"true"` and `pii_policy_tag` is `""`, `includes/policy_tags.js` returns only the column `description`.
 
-This keeps local development compilation working without Cloud IAM Policy Tag bindings.
+Set `allow_untagged_pii` to `"false"` in production so missing Policy Tags fail Dataform compilation.
 
 ## Medallion Architecture
 
 ```
 definitions/
   01_bronze/      Raw CDC source declarations (no DDL)
-  02_silver/      Conformed incremental and SCD Type 2 tables
+  02_silver/      Conformed tables and partition-filtered assertions
   03_gold/
     finance/      Finance domain aggregation marts
     retail/       Retail store domain marts
@@ -54,6 +57,8 @@ tests/            Hermetic Python integrity test suite
 1. **Bronze (`definitions/01_bronze/`)**: Holds Dataform `declaration` files only (`pos_orders_cdc`, `crm_customers_cdc`).
 2. **Silver (`definitions/02_silver/`)**: Conforms records (`fct_orders`, `dim_customers`) with deduplication, SCD Type 2 windows, Policy Tags, and assertions.
 3. **Gold (`definitions/03_gold/`)**: Aggregates Silver tables into partitioned marts (`mart_daily_revenue`, `mart_store_performance`) with partition filters.
+
+Tables with `requirePartitionFilter: true` use standalone assertion `.sqlx` files (`assert_fct_orders_quality.sqlx`) with a partition predicate.
 
 > [!NOTE]
 > **Scaling Beyond 25 Data Engineers (Data Mesh Split)**

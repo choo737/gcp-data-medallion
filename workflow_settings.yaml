@@ -10,4 +10,7 @@ vars:
   silver_dataset: silver_curated
   gold_project: example-gold-project
   gold_dataset: gold_mart
+  gold_retail_project: ""
+  gold_retail_dataset: ""
   pii_policy_tag: ""
+  allow_untagged_pii: "true"

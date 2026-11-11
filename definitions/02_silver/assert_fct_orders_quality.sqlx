@@ -1,0 +1,42 @@
+config {
+  type: "assertion",
+  database: dataform.projectConfig.vars.silver_project,
+  description: "Partition-filtered null, negative amount, and duplicate key check for fct_orders."
+}
+
+WITH filtered AS (
+  SELECT
+    order_id,
+    order_date,
+    customer_id,
+    net_amount
+  FROM ${ref("fct_orders")}
+  WHERE order_date >= DATE('1970-01-01')
+),
+invalid_rows AS (
+  SELECT
+    order_id,
+    'NULL_REQUIRED_OR_NEGATIVE' AS violation
+  FROM filtered
+  WHERE order_id IS NULL
+    OR order_date IS NULL
+    OR customer_id IS NULL
+    OR net_amount < 0
+),
+duplicate_keys AS (
+  SELECT
+    order_id,
+    'DUPLICATE_ORDER_ID' AS violation
+  FROM filtered
+  GROUP BY order_id
+  HAVING COUNT(*) > 1
+)
+SELECT
+  order_id,
+  violation
+FROM invalid_rows
+UNION ALL
+SELECT
+  order_id,
+  violation
+FROM duplicate_keys

@@ -22,12 +22,13 @@ Follow these steps when adding a new domain dataset to `gcp-data-medallion`.
 5. Attach `policy_tags.piiColumnConfig("...")` to every PII column.
 6. Project columns explicitly without `SELECT *`.
 7. Add `${audit_columns.ingestedAtSql()}` and `${audit_columns.recordHashSql([...])}`.
-8. Define `assertions` (`nonNull` and `uniqueKey`).
+8. If `requirePartitionFilter` is `true`, add a standalone `assert_<entity>_quality.sqlx` (`type: "assertion"`) with a `WHERE` partition filter.
+9. If `requirePartitionFilter` is not set, define inline `assertions` (`nonNull` and `uniqueKey`).
 
 ## 3. Build the Gold Business Mart
 
 1. Create `definitions/03_gold/<domain>/mart_<name>.sqlx`.
-2. Set `database: dataform.projectConfig.vars.gold_project` and `schema: dataform.projectConfig.vars.gold_dataset`.
+2. Set `database` and `schema` with optional domain vars falling back to `gold_project` and `gold_dataset`.
 3. Add a `WHERE` filter on any upstream `partitionBy` column if `requirePartitionFilter: true` is enabled.
 4. Define `assertions` (`nonNull`) on key dimensions and metrics.
 5. Update `CODEOWNERS` if a new domain folder was added.
