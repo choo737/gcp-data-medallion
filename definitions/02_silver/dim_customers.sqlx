@@ -1,0 +1,50 @@
+config {
+  type: "table",
+  database: dataform.projectConfig.vars.silver_project,
+  schema: dataform.projectConfig.vars.silver_dataset,
+  description: "SCD Type 2 customer dimension conformed in Silver.",
+  bigquery: {
+    clusterBy: ["country_code", "customer_id"]
+  },
+  assertions: {
+    nonNull: ["customer_id", "valid_from"],
+    uniqueKey: ["customer_id", "valid_from"]
+  },
+  columns: {
+    customer_id: "Unique CRM customer identifier.",
+    customer_name: "Customer full display name.",
+    customer_ic_number: policy_tags.piiColumnConfig("Customer national ID"),
+    segment: "Customer loyalty or tier segment.",
+    country_code: "ISO 3166-1 alpha-2 country code.",
+    updated_at: "Source CDC event timestamp.",
+    valid_from: "Start timestamp of the dimension version.",
+    valid_to: "End timestamp of the dimension version.",
+    is_current: "True when this row is the latest active version.",
+    ingested_at: "Silver ingestion timestamp.",
+    record_hash: "SHA-256 hash of customer dimension attributes."
+  }
+}
+
+WITH deduplicated_cdc AS (
+  SELECT
+    customer_id,
+    customer_name,
+    customer_ic_number,
+    segment,
+    country_code,
+    updated_at
+  FROM ${ref("crm_customers_cdc")}
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id, updated_at ORDER BY updated_at DESC) = 1
+)
+
+SELECT
+  customer_id,
+  customer_name,
+  customer_ic_number,
+  segment,
+  country_code,
+  updated_at,
+  ${scd_type2.scd2WindowColumnsSql("customer_id", "updated_at", "TIMESTAMP('9999-12-31 23:59:59 UTC')")},
+  ${audit_columns.ingestedAtSql()} AS ingested_at,
+  ${audit_columns.recordHashSql(["customer_id", "customer_name", "segment", "country_code"])} AS record_hash
+FROM deduplicated_cdc

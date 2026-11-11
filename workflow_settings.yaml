@@ -1,0 +1,13 @@
+defaultProject: example-silver-project
+defaultLocation: asia-southeast1
+defaultDataset: silver_curated
+defaultAssertionDataset: silver_assertions
+dataformCoreVersion: 3.0.43
+vars:
+  bronze_project: example-bronze-project
+  bronze_dataset: bronze_raw
+  silver_project: example-silver-project
+  silver_dataset: silver_curated
+  gold_project: example-gold-project
+  gold_dataset: gold_mart
+  pii_policy_tag: ""

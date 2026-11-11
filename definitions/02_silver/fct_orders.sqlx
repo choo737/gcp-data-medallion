@@ -1,0 +1,55 @@
+config {
+  type: "incremental",
+  database: dataform.projectConfig.vars.silver_project,
+  schema: dataform.projectConfig.vars.silver_dataset,
+  uniqueKey: ["order_id"],
+  description: "Deduplicated POS orders conformed in Silver.",
+  bigquery: {
+    partitionBy: "order_date",
+    clusterBy: ["customer_id", "country_code"],
+    requirePartitionFilter: true,
+    updatePartitionFilter: "order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)"
+  },
+  assertions: {
+    nonNull: ["order_id", "order_date", "customer_id"],
+    uniqueKey: ["order_id"]
+  },
+  columns: {
+    order_id: "Unique POS order identifier.",
+    order_date: "Order calendar date used for partitioning.",
+    store_id: "Retail store identifier.",
+    customer_id: "Customer identifier.",
+    customer_ic_number: policy_tags.piiColumnConfig("Customer national ID"),
+    country_code: "ISO country code.",
+    currency_code: "ISO 4217 currency code.",
+    gross_amount: "Gross order amount.",
+    discount_amount: "Total discount amount.",
+    net_amount: "Net order amount.",
+    status: "Latest order status.",
+    updated_at: "Latest CDC update timestamp.",
+    ingested_at: "Silver ingestion timestamp.",
+    record_hash: "SHA-256 hash of key order attributes."
+  }
+}
+
+SELECT
+  order_id,
+  order_date,
+  store_id,
+  customer_id,
+  customer_ic_number,
+  country_code,
+  currency_code,
+  gross_amount,
+  discount_amount,
+  net_amount,
+  status,
+  updated_at,
+  ${audit_columns.ingestedAtSql()} AS ingested_at,
+  ${audit_columns.recordHashSql(["order_id", "net_amount", "status"])} AS record_hash
+FROM ${ref("pos_orders_cdc")}
+${when(
+  incremental(),
+  `WHERE order_date >= (SELECT COALESCE(DATE_SUB(MAX(order_date), INTERVAL 3 DAY), DATE('1970-01-01')) FROM ${self()} WHERE order_date >= DATE('1970-01-01'))`
+)}
+QUALIFY ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC) = 1

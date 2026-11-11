@@ -1,0 +1,38 @@
+config {
+  type: "table",
+  database: dataform.projectConfig.vars.gold_project,
+  schema: dataform.projectConfig.vars.gold_dataset,
+  description: "Daily retail store performance mart aggregated by date and store.",
+  bigquery: {
+    partitionBy: "order_date",
+    clusterBy: ["store_id", "country_code"]
+  },
+  assertions: {
+    nonNull: ["order_date", "store_id", "net_revenue"]
+  },
+  columns: {
+    order_date: "Order calendar date.",
+    store_id: "Retail store identifier.",
+    country_code: "ISO country code.",
+    order_count: "Completed order count for the day and store.",
+    unique_customers: "Distinct active customer count.",
+    gross_revenue: "Total gross order revenue.",
+    net_revenue: "Total net revenue after discounts."
+  }
+}
+
+SELECT
+  order_date,
+  store_id,
+  country_code,
+  COUNT(order_id) AS order_count,
+  COUNT(DISTINCT customer_id) AS unique_customers,
+  SUM(gross_amount) AS gross_revenue,
+  SUM(net_amount) AS net_revenue
+FROM ${ref("fct_orders")}
+WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 3650 DAY)
+  AND status != 'CANCELLED'
+GROUP BY
+  order_date,
+  store_id,
+  country_code

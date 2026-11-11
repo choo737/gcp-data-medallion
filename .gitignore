@@ -1,0 +1,5 @@
+node_modules/
+.df-credentials.json
+*.env
+.DS_Store
+__pycache__/

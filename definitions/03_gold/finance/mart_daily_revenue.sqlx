@@ -1,0 +1,33 @@
+config {
+  type: "table",
+  database: dataform.projectConfig.vars.gold_project,
+  schema: dataform.projectConfig.vars.gold_dataset,
+  description: "Daily finance revenue mart aggregated by order date and country.",
+  bigquery: {
+    partitionBy: "order_date",
+    clusterBy: ["country_code"]
+  },
+  assertions: {
+    nonNull: ["order_date", "country_code", "gross_revenue"]
+  },
+  columns: {
+    order_date: "Order calendar date.",
+    country_code: "ISO country code.",
+    order_count: "Completed order count for the day and country.",
+    gross_revenue: "Total gross order revenue.",
+    net_revenue: "Total net revenue after discounts."
+  }
+}
+
+SELECT
+  order_date,
+  country_code,
+  COUNT(order_id) AS order_count,
+  SUM(gross_amount) AS gross_revenue,
+  SUM(net_amount) AS net_revenue
+FROM ${ref("fct_orders")}
+WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 3650 DAY)
+  AND status != 'CANCELLED'
+GROUP BY
+  order_date,
+  country_code

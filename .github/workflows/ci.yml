@@ -1,0 +1,42 @@
+name: Medallion Integrity CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate package.json and workflow_settings.yaml
+        run: |
+          python3 - << 'EOF'
+          import json
+          from pathlib import Path
+          from tests.test_medallion_integrity import REQUIRED_VARS, parse_workflow_settings
+
+          pkg = json.loads(Path("package.json").read_text(encoding="utf-8"))
+          assert pkg["name"] == "gcp-data-medallion"
+          assert pkg["dependencies"]["@dataform/core"] == "3.0.43"
+
+          wf = parse_workflow_settings(Path("workflow_settings.yaml").read_text(encoding="utf-8"))
+          assert wf["dataformCoreVersion"] == "3.0.43"
+          for key in REQUIRED_VARS:
+              assert key in wf["vars"], f"Missing var {key}"
+          print("Schema checks passed.")
+          EOF
+
+      - name: Run medallion integrity tests
+        run: python3 -m unittest discover -s tests -v

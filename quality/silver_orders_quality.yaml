@@ -1,0 +1,21 @@
+rules:
+  - nonNullExpectation: {}
+    column: order_id
+    dimension: COMPLETENESS
+    description: "Order ID must not be null."
+    threshold: 1.0
+
+  - nonNullExpectation: {}
+    column: order_date
+    dimension: COMPLETENESS
+    description: "Order date must not be null."
+    threshold: 1.0
+
+  - rangeExpectation:
+      minValue: 0
+      strictMin: false
+    column: net_amount
+    dimension: ACCURACY
+    description: "Net amount must be zero or positive."
+    ignoreNull: false
+    threshold: 1.0
