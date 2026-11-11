@@ -37,6 +37,8 @@ BigQuery Dataform v3 requires `workflow_settings.yaml` at the repository root (`
 
 Dataform reads this file first to set `dataformCoreVersion` (`3.1.5`), default dataset targets, and compilation `vars`.
 
+This repo omits `package.json` because Dataform v3 rejects setting `dataformCoreVersion` when `package.json` exists.
+
 ## Compilation Variables Contract
 
 The ten variables in `workflow_settings.yaml` connect Terraform outputs to SQLX definitions.

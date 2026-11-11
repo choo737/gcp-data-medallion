@@ -1,7 +1,6 @@
 """Hermetic integrity tests for the gcp-data-medallion Dataform repository."""
 
 import hashlib
-import json
 import re
 import unittest
 from pathlib import Path
@@ -24,7 +23,6 @@ REQUIRED_VARS = (
 
 REQUIRED_FILES = (
     "workflow_settings.yaml",
-    "package.json",
     "LICENSE",
     ".gitignore",
     "CODEOWNERS",
@@ -365,18 +363,16 @@ class MedallionIntegrityTest(unittest.TestCase):
             self.assertTrue(workflow[key], f"Empty {key} in workflow_settings.yaml.")
 
         self.assertEqual(workflow["dataformCoreVersion"], "3.1.5")
+        self.assertFalse(
+            package_path.exists(),
+            "package.json must not exist when dataformCoreVersion is defined in workflow_settings.yaml.",
+        )
+
         vars_map = workflow["vars"]
         for var_name in REQUIRED_VARS:
             self.assertIn(var_name, vars_map, f"Missing contract var '{var_name}'.")
         self.assertEqual(vars_map["pii_policy_tag"], "")
         self.assertEqual(vars_map["allow_untagged_pii"], "true")
-
-        package_data = json.loads(package_path.read_text(encoding="utf-8"))
-        self.assertEqual(package_data.get("name"), "gcp-data-medallion")
-        self.assertEqual(
-            package_data.get("dependencies", {}).get("@dataform/core"),
-            "3.1.5",
-        )
 
     def test_includes_helpers_present(self):
         expected_exports = {
@@ -530,7 +526,7 @@ class MedallionIntegrityTest(unittest.TestCase):
         self.assertRegex(ci_text, r"actions/setup-python@[0-9a-f]{40}")
         self.assertIn("python3 -m unittest discover -s tests -v", ci_text)
         self.assertIn("workflow_settings.yaml", ci_text)
-        self.assertIn("package.json", ci_text)
+        self.assertIn('not Path("package.json").exists()', ci_text)
         self.assertIn("allow_untagged_pii", ci_text)
 
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")

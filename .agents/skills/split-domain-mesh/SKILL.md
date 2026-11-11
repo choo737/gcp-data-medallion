@@ -10,7 +10,7 @@ Use this recipe when `CODEOWNERS` review load or DAG compile time becomes a bott
 ## 1. Provision the New Repository
 
 1. Create a new repository such as `medallion-<domain>`.
-2. Copy `workflow_settings.yaml`, `package.json`, `includes/`, `tests/`, and `AGENTS.md`.
+2. Copy `workflow_settings.yaml`, `includes/`, `tests/`, and `AGENTS.md`.
 3. Ask the platform team to add a `google_dataform_repository` in `gcp-foundation` pointing to the new repo.
 
 ## 2. Replace Upstream Silver Refs With Declarations

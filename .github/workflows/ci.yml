@@ -23,16 +23,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate package.json and workflow_settings.yaml
+      - name: Validate workflow_settings.yaml
         run: |
           python3 - << 'EOF'
-          import json
           from pathlib import Path
           from tests.test_medallion_integrity import REQUIRED_VARS, parse_workflow_settings
 
-          pkg = json.loads(Path("package.json").read_text(encoding="utf-8"))
-          assert pkg["name"] == "gcp-data-medallion"
-          assert pkg["dependencies"]["@dataform/core"] == "3.1.5"
+          assert not Path("package.json").exists(), (
+              "package.json must not exist when dataformCoreVersion is set in workflow_settings.yaml"
+          )
 
           wf = parse_workflow_settings(Path("workflow_settings.yaml").read_text(encoding="utf-8"))
           assert wf["dataformCoreVersion"] == "3.1.5"
