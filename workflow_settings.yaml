@@ -14,3 +14,4 @@ vars:
   gold_retail_dataset: ""
   pii_policy_tag: ""
   allow_untagged_pii: "true"
+  filter_cdc_deletes: "true"

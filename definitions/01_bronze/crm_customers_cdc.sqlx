@@ -10,6 +10,7 @@ config {
     customer_ic_number: "Customer national ID number.",
     segment: "Customer loyalty or tier segment.",
     country_code: "ISO 3166-1 alpha-2 country code.",
-    updated_at: "CDC event update timestamp."
+    updated_at: "CDC event update timestamp.",
+    _metadata_deleted: "Nullable Datastream or streaming CDC delete tombstone flag."
   }
 }

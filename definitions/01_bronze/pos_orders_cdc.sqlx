@@ -16,6 +16,7 @@ config {
     discount_amount: "Total discount applied to order.",
     net_amount: "Net order amount after discounts.",
     status: "Order lifecycle status.",
-    updated_at: "CDC event update timestamp."
+    updated_at: "CDC event update timestamp.",
+    _metadata_deleted: "Nullable Datastream or streaming CDC delete tombstone flag."
   }
 }

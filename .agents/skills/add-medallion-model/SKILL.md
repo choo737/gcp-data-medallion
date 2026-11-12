@@ -11,7 +11,7 @@ Follow these steps when adding a new domain dataset to `gcp-data-medallion`.
 
 1. Create `definitions/01_bronze/<source_name>.sqlx`.
 2. Set `type: "declaration"` with `database: dataform.projectConfig.vars.bronze_project` and `schema: dataform.projectConfig.vars.bronze_dataset`.
-3. Document every source column inside `columns: { ... }`.
+3. Document every source column inside `columns: { ... }`, including `_metadata_deleted` for CDC sources.
 
 ## 2. Build the Conformed Silver Table
 
@@ -21,9 +21,10 @@ Follow these steps when adding a new domain dataset to `gcp-data-medallion`.
 4. Add `updatePartitionFilter` whenever `uniqueKey` and `requirePartitionFilter: true` appear together.
 5. Attach `policy_tags.piiColumnConfig("...")` to every PII column.
 6. Project columns explicitly without `SELECT *`.
-7. Add `${audit_columns.ingestedAtSql()}` and `${audit_columns.recordHashSql([...])}`.
-8. If `requirePartitionFilter` is `true`, add a standalone `assert_<entity>_quality.sqlx` (`type: "assertion"`) with a `WHERE` partition filter.
-9. If `requirePartitionFilter` is not set, define inline `assertions` (`nonNull` and `uniqueKey`).
+7. Add `${audit_columns.ingestedAtSql()}`, `${audit_columns.recordHashSql([...])}`, and `${cdc_helpers.activeCdcFilter()}` for CDC sources.
+8. Gate optional `_metadata_deleted` projections with `cdc_helpers.filterCdcDeletes()` for legacy Bronze compatibility.
+9. If `requirePartitionFilter` is `true`, add a standalone `assert_<entity>_quality.sqlx` (`type: "assertion"`) with a `WHERE` partition filter.
+10. If `requirePartitionFilter` is not set, define inline `assertions` (`nonNull` and `uniqueKey`).
 
 ## 3. Build the Gold Business Mart
 
@@ -35,4 +36,4 @@ Follow these steps when adding a new domain dataset to `gcp-data-medallion`.
 
 ## 4. Validate
 
-Run `make test` and confirm all unit tests pass.
+Run `make test` locally and use `.github/workflows/dataform-dryrun.yml` when WIF variables are configured.

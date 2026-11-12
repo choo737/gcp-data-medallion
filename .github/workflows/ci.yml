@@ -45,6 +45,7 @@ jobs:
           node - << 'EOF'
           const assert = require("assert");
           const audit = require("./includes/audit_columns");
+          const cdc = require("./includes/cdc_helpers");
           const policyTags = require("./includes/policy_tags");
           const scd2 = require("./includes/scd_type2");
 
@@ -81,6 +82,16 @@ jobs:
           assert(scdSql.includes("AS valid_from"));
           assert(scdSql.includes("AS valid_to"));
           assert(scdSql.includes("AS is_current"));
+
+          global.dataform = { projectConfig: { vars: { filter_cdc_deletes: "true" } } };
+          assert.strictEqual(cdc.filterCdcDeletes(), true);
+          assert.strictEqual(cdc.activeCdcFilter(), "COALESCE(_metadata_deleted, FALSE) = FALSE");
+          assert.strictEqual(cdc.activeCdcFilter("src"), "COALESCE(src._metadata_deleted, FALSE) = FALSE");
+          assert.throws(() => cdc.activeCdcFilter("src; DROP TABLE x"), /Invalid SQL table alias/);
+
+          global.dataform = { projectConfig: { vars: { filter_cdc_deletes: "false" } } };
+          assert.strictEqual(cdc.filterCdcDeletes(), false);
+          assert.strictEqual(cdc.activeCdcFilter("src"), "TRUE");
           console.log("Node JS helper checks passed.");
           EOF
 

@@ -2,6 +2,8 @@
 
 import hashlib
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -32,6 +34,11 @@ REQUIRED_FILES = (
     "CLAUDE.md",
     "GEMINI.md",
     ".github/workflows/ci.yml",
+    ".github/workflows/dataform-dryrun.yml",
+    "includes/audit_columns.js",
+    "includes/policy_tags.js",
+    "includes/scd_type2.js",
+    "includes/cdc_helpers.js",
     "quality/silver_orders_quality.yaml",
     ".agents/skills/add-medallion-model/SKILL.md",
     ".agents/skills/split-domain-mesh/SKILL.md",
@@ -61,6 +68,7 @@ FORBIDDEN_TOKEN_SHA256 = {
     "28a6c9ad99acc2abeef4831da37cf37001345f05fa7327562ee4a9b167019b04",
     "9df5c2af39fc3666ac0676a762ef08a86c0f0f7451976f7d290e329b07a5241e",
     "d43e610ed1d8b1bdf2fc1d636d5db802e331d6c3e8467e65f26b1ed874f5ad55",
+    "bcaeb7aaf13db3381e1c0c07ca7d7c9e0b58bb1a77aa177c420d9ddc1f42b72f",
 }
 FORBIDDEN_TOKEN_LENGTHS = (6, 9, 12, 17)
 
@@ -373,12 +381,17 @@ class MedallionIntegrityTest(unittest.TestCase):
             self.assertIn(var_name, vars_map, f"Missing contract var '{var_name}'.")
         self.assertEqual(vars_map["pii_policy_tag"], "")
         self.assertEqual(vars_map["allow_untagged_pii"], "true")
+        self.assertEqual(vars_map.get("filter_cdc_deletes"), "true")
 
     def test_includes_helpers_present(self):
+        node_bin = shutil.which("node")
+        self.assertIsNotNone(node_bin, "node CLI must be installed to syntax-check includes/*.js.")
+
         expected_exports = {
             "includes/audit_columns.js": ("ingestedAtSql", "recordHashSql"),
             "includes/policy_tags.js": ("allowUntaggedPii", "piiColumnConfig"),
             "includes/scd_type2.js": ("scd2WindowColumnsSql", "buildScd2Query"),
+            "includes/cdc_helpers.js": ("filterCdcDeletes", "activeCdcFilter"),
         }
         for rel_path, symbols in expected_exports.items():
             full_path = REPO_ROOT / rel_path
@@ -386,6 +399,64 @@ class MedallionIntegrityTest(unittest.TestCase):
             content = full_path.read_text(encoding="utf-8")
             for symbol in symbols:
                 self.assertIn(symbol, content, f"{rel_path} must define {symbol}.")
+            proc = subprocess.run(
+                [node_bin, "--check", str(full_path)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                proc.returncode,
+                0,
+                f"node --check failed for {rel_path}: {proc.stderr or proc.stdout}",
+            )
+
+        cdc_helper = (REPO_ROOT / "includes/cdc_helpers.js").read_text(encoding="utf-8")
+        self.assertIn("/^[A-Za-z_][A-Za-z0-9_]*$/", cdc_helper)
+
+    def test_cdc_helpers_runtime_behavior(self):
+        node_bin = shutil.which("node")
+        self.assertIsNotNone(node_bin, "node CLI must be installed to test includes/cdc_helpers.js.")
+        script = """
+const assert = require("assert");
+const cdc = require("./includes/cdc_helpers");
+
+global.dataform = { projectConfig: { vars: {} } };
+assert.strictEqual(cdc.filterCdcDeletes(), true);
+assert.strictEqual(cdc.activeCdcFilter(), "COALESCE(_metadata_deleted, FALSE) = FALSE");
+assert.strictEqual(cdc.activeCdcFilter(""), "COALESCE(_metadata_deleted, FALSE) = FALSE");
+assert.strictEqual(cdc.activeCdcFilter("src"), "COALESCE(src._metadata_deleted, FALSE) = FALSE");
+
+global.dataform = { projectConfig: { vars: { filter_cdc_deletes: "true" } } };
+assert.strictEqual(cdc.filterCdcDeletes(), true);
+assert.strictEqual(cdc.activeCdcFilter("orders"), "COALESCE(orders._metadata_deleted, FALSE) = FALSE");
+
+for (const badAlias of ["src; DROP TABLE x", "1bad", "a.b", " ", "src--comment"]) {
+  assert.throws(() => cdc.activeCdcFilter(badAlias), /Invalid SQL table alias/);
+}
+assert.throws(() => cdc.activeCdcFilter(123), /must be a string/);
+
+for (const offValue of ["false", "FALSE", false]) {
+  global.dataform = { projectConfig: { vars: { filter_cdc_deletes: offValue } } };
+  assert.strictEqual(cdc.filterCdcDeletes(), false);
+  assert.strictEqual(cdc.activeCdcFilter(), "TRUE");
+  assert.strictEqual(cdc.activeCdcFilter("src"), "TRUE");
+  assert.throws(() => cdc.activeCdcFilter("src; DROP TABLE x"), /Invalid SQL table alias/);
+}
+"""
+        proc = subprocess.run(
+            [node_bin, "-e", script],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            proc.returncode,
+            0,
+            f"cdc_helpers runtime check failed: {proc.stderr or proc.stdout}",
+        )
 
     def test_sqlx_definitions_and_layer_contracts(self):
         definitions_dir = REPO_ROOT / "definitions"
@@ -479,16 +550,42 @@ class MedallionIntegrityTest(unittest.TestCase):
                     f"{rel}: queries over fct_orders must filter on order_date.",
                 )
 
+        pos_orders_bronze = (REPO_ROOT / "definitions/01_bronze/pos_orders_cdc.sqlx").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("_metadata_deleted", pos_orders_bronze)
+
+        crm_customers_bronze = (
+            REPO_ROOT / "definitions/01_bronze/crm_customers_cdc.sqlx"
+        ).read_text(encoding="utf-8")
+        self.assertIn("_metadata_deleted", crm_customers_bronze)
+
         fct_orders = (REPO_ROOT / "definitions/02_silver/fct_orders.sqlx").read_text(encoding="utf-8")
         self.assertIn("store_id", fct_orders)
         self.assertIn("policy_tags.piiColumnConfig", fct_orders)
+        self.assertIn("cdc_helpers.activeCdcFilter(", fct_orders)
+        self.assertIn("cdc_helpers.filterCdcDeletes()", fct_orders)
 
         dim_customers = (REPO_ROOT / "definitions/02_silver/dim_customers.sqlx").read_text(
             encoding="utf-8"
         )
         self.assertIn("scd_type2.", dim_customers)
+        self.assertIn("cdc_helpers.activeCdcFilter(", dim_customers)
+        self.assertIn("cdc_helpers.filterCdcDeletes()", dim_customers)
         self.assertRegex(dim_customers, r"customer_name\s*:\s*policy_tags\.piiColumnConfig\(")
         self.assertRegex(dim_customers, r"customer_ic_number\s*:\s*policy_tags\.piiColumnConfig\(")
+
+        for silver_model in ("fct_orders.sqlx", "dim_customers.sqlx"):
+            silver_text = (REPO_ROOT / "definitions/02_silver" / silver_model).read_text(
+                encoding="utf-8"
+            )
+            for line_no, line in enumerate(silver_text.splitlines(), start=1):
+                if "_metadata_deleted" in line:
+                    self.assertIn(
+                        "cdc_helpers.filterCdcDeletes()",
+                        line,
+                        f"{silver_model}:{line_no}: _metadata_deleted reference must be gated by cdc_helpers.filterCdcDeletes().",
+                    )
 
         retail_mart = (
             REPO_ROOT / "definitions/03_gold/retail/mart_store_performance.sqlx"
@@ -531,6 +628,9 @@ class MedallionIntegrityTest(unittest.TestCase):
 
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("https://github.com/choo737/gcp-foundation", readme)
+        self.assertIn("https://github.com/choo737/gcp-data-ingestion", readme)
+        self.assertIn("https://github.com/choo737/gcp-data-medallion", readme)
+        self.assertIn("3-Repository Accelerator Suite", readme)
         self.assertIn("workflow_settings.yaml", readme)
         self.assertIn("3.1.5", readme)
         self.assertIn("> [!NOTE]", readme)
@@ -538,6 +638,12 @@ class MedallionIntegrityTest(unittest.TestCase):
         self.assertIn("modules/data/bigquery-reservations/", readme)
         self.assertIn("Who Creates Bronze Tables", readme)
         self.assertIn("Why Dataform Over dbt", readme)
+        self.assertIn("filter_cdc_deletes", readme)
+        self.assertIn("includes/cdc_helpers.js", readme)
+        self.assertIn("dataform-dryrun.yml", readme)
+        self.assertIn("GCP_WIF_PROVIDER", readme)
+        self.assertIn("GCP_WIF_SERVICE_ACCOUNT", readme)
+        self.assertIn("DATAFORM_REPO_PATH", readme)
         self.assertNotIn("25 data engineers", readme)
         for var_name in REQUIRED_VARS:
             self.assertIn(var_name, readme)
@@ -547,7 +653,74 @@ class MedallionIntegrityTest(unittest.TestCase):
         )
         self.assertNotIn("25 data engineers", split_skill)
 
+    def test_dataform_dryrun_workflow_security_and_contract(self):
+        workflow_files = sorted((REPO_ROOT / ".github/workflows").glob("*.yml"))
+        for wf_path in workflow_files:
+            wf_text = wf_path.read_text(encoding="utf-8")
+            uses_refs = re.findall(r"uses:\s*([^\s#]+)", wf_text)
+            self.assertGreaterEqual(len(uses_refs), 1, f"{wf_path.name}: expected pinned actions.")
+            for ref in uses_refs:
+                self.assertRegex(
+                    ref,
+                    r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$",
+                    f"{wf_path.name}: action '{ref}' must be pinned to a 40-char commit SHA.",
+                )
+
+            in_run_block = False
+            run_indent = 0
+            for line_no, raw_line in enumerate(wf_text.splitlines(), start=1):
+                stripped = raw_line.strip()
+                indent = len(raw_line) - len(raw_line.lstrip(" "))
+                if in_run_block:
+                    if stripped and indent <= run_indent:
+                        in_run_block = False
+                    else:
+                        self.assertNotIn(
+                            "${{",
+                            raw_line,
+                            f"{wf_path.name}:{line_no}: GitHub Actions expression interpolation inside run block is forbidden.",
+                        )
+                        continue
+                if re.match(r"^(?:-\s*)?run\s*:\s*\|", stripped):
+                    in_run_block = True
+                    run_indent = indent
+                elif re.match(r"^(?:-\s*)?run\s*:", stripped):
+                    self.assertNotIn(
+                        "${{",
+                        raw_line,
+                        f"{wf_path.name}:{line_no}: GitHub Actions expression interpolation inside run line is forbidden.",
+                    )
+
+        dryrun = (REPO_ROOT / ".github/workflows/dataform-dryrun.yml").read_text(encoding="utf-8")
+        self.assertRegex(dryrun, r"(?m)^\s*workflow_dispatch:\s*$")
+        self.assertRegex(dryrun, r"(?m)^\s*pull_request:\s*$")
+        self.assertRegex(dryrun, r"(?m)^permissions:\s*\n\s+contents:\s*read\s*\n\s+id-token:\s*write\b")
+        self.assertIn(
+            "vars.GCP_WIF_PROVIDER != '' && vars.GCP_WIF_SERVICE_ACCOUNT != '' && vars.DATAFORM_REPO_PATH != ''",
+            dryrun,
+        )
+        self.assertIn("actions/checkout@11d5960a326750d5838078e36cf38b85af677262", dryrun)
+        self.assertIn("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093", dryrun)
+        self.assertIn("workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}", dryrun)
+        self.assertIn("service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}", dryrun)
+        self.assertIn("token_format: access_token", dryrun)
+        self.assertIn("urllib.request", dryrun)
+        self.assertIn("GITHUB_HEAD_REF", dryrun)
+        self.assertIn("compilationResults", dryrun)
+        self.assertIn("compilationErrors", dryrun)
+        self.assertNotRegex(dryrun, r"\bcurl\b")
+
     def test_markdown_prose_sentence_length(self):
+        actual_md_files = {
+            path.relative_to(REPO_ROOT).as_posix()
+            for path in iter_repo_files()
+            if path.suffix == ".md"
+        }
+        self.assertEqual(
+            set(MARKDOWN_DOC_FILES),
+            actual_md_files,
+            "MARKDOWN_DOC_FILES must include every .md file in the repository.",
+        )
         for rel_path in MARKDOWN_DOC_FILES:
             text = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
             for line in extract_markdown_prose_lines(text):

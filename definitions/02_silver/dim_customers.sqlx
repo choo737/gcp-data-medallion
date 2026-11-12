@@ -32,9 +32,25 @@ WITH deduplicated_cdc AS (
     customer_ic_number,
     segment,
     country_code,
-    updated_at
+    updated_at${when(cdc_helpers.filterCdcDeletes(), ",\n    _metadata_deleted")}
   FROM ${ref("crm_customers_cdc")}
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id, updated_at ORDER BY updated_at DESC) = 1
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY customer_id, updated_at
+    ORDER BY updated_at DESC${when(cdc_helpers.filterCdcDeletes(), ", COALESCE(_metadata_deleted, FALSE) DESC")}
+  ) = 1
+),
+scd2_versions AS (
+  SELECT
+    customer_id,
+    customer_name,
+    customer_ic_number,
+    segment,
+    country_code,
+    updated_at${when(cdc_helpers.filterCdcDeletes(), ",\n    _metadata_deleted")},
+    ${scd_type2.scd2WindowColumnsSql("customer_id", "updated_at", "TIMESTAMP('9999-12-31 23:59:59 UTC')")},
+    ${audit_columns.ingestedAtSql()} AS ingested_at,
+    ${audit_columns.recordHashSql(["customer_id", "customer_name", "segment", "country_code"])} AS record_hash
+  FROM deduplicated_cdc
 )
 
 SELECT
@@ -44,7 +60,10 @@ SELECT
   segment,
   country_code,
   updated_at,
-  ${scd_type2.scd2WindowColumnsSql("customer_id", "updated_at", "TIMESTAMP('9999-12-31 23:59:59 UTC')")},
-  ${audit_columns.ingestedAtSql()} AS ingested_at,
-  ${audit_columns.recordHashSql(["customer_id", "customer_name", "segment", "country_code"])} AS record_hash
-FROM deduplicated_cdc
+  valid_from,
+  valid_to,
+  is_current,
+  ingested_at,
+  record_hash
+FROM scd2_versions
+WHERE ${cdc_helpers.activeCdcFilter()}

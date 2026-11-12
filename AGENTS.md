@@ -4,8 +4,8 @@ This file defines repository rules for OpenAI Codex, Antigravity, Cursor, and Am
 
 ## Medallion Layer Contract
 
-- **`definitions/01_bronze/`**: Use `type: "declaration"` only. Never define tables or views in Bronze.
-- **`definitions/02_silver/`**: Build conformed incremental or SCD Type 2 tables. Attach `policy_tags.piiColumnConfig(...)` to every PII column.
+- **`definitions/01_bronze/`**: Use `type: "declaration"` only. Never define tables or views in Bronze. Document `_metadata_deleted` on CDC declarations.
+- **`definitions/02_silver/`**: Build conformed incremental or SCD Type 2 tables. Attach `policy_tags.piiColumnConfig(...)` to every PII column. Filter CDC tombstones with `cdc_helpers.activeCdcFilter()`.
 - **Partitioned Assertions**: Never use inline `assertions` when `requirePartitionFilter: true` is enabled. Create a standalone `type: "assertion"` file with a `WHERE` partition filter instead.
 - **`definitions/03_gold/`**: Group marts by business domain (`finance/`, `retail/`). Always filter `fct_orders` on `order_date` to satisfy `requirePartitionFilter: true`. Define `assertions` on every mart.
 - **SQLX Hygiene**: Never use `SELECT *`. Project every column explicitly. Keep `config { ... }` braces balanced.
@@ -13,6 +13,7 @@ This file defines repository rules for OpenAI Codex, Antigravity, Cursor, and Am
 ## Reusable Helpers (`includes/`)
 
 - Use `audit_columns.ingestedAtSql()` and `audit_columns.recordHashSql(columns)` for Silver audit columns.
+- Use `cdc_helpers.activeCdcFilter(alias)` and `cdc_helpers.filterCdcDeletes()` for Bronze CDC tombstone filtering.
 - Use `policy_tags.piiColumnConfig(description)` for BigQuery Policy Tag attachment and `allow_untagged_pii` checks.
 - Use `scd_type2.scd2WindowColumnsSql(...)` or `scd_type2.buildScd2Query(...)` for CDC history windows.
 
@@ -29,3 +30,5 @@ Run the hermetic test suite after every change.
 ```bash
 make test
 ```
+
+Optional workflow `.github/workflows/dataform-dryrun.yml` runs live Dataform compilation via OIDC WIF when repo variables are configured.

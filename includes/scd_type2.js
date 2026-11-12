@@ -1,28 +1,65 @@
 // Reusable SCD Type 2 window helpers for CDC streams.
 
+const VALID_IDENTIFIER_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const VALID_RELATION_REGEX =
+  /^(?:[A-Za-z_][A-Za-z0-9_]*|`[A-Za-z0-9_-]+\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*`)$/;
+const VALID_TIMESTAMP_LITERAL_REGEX =
+  /^TIMESTAMP\('(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})? UTC)'\)$/;
+const VALID_ISO_UTC_REGEX =
+  /^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})? UTC)$/;
+
+function assertIdentifier(value, label) {
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be a string identifier.`);
+  }
+  const trimmed = value.trim();
+  if (!VALID_IDENTIFIER_REGEX.test(trimmed)) {
+    throw new Error(`Invalid SQL identifier "${value}" for ${label}.`);
+  }
+  return trimmed;
+}
+
+function normalizeOpenEndSql(openEndSql) {
+  if (openEndSql === undefined || openEndSql === null || openEndSql === "") {
+    return null;
+  }
+  if (typeof openEndSql !== "string") {
+    throw new Error("openEndSql must be a UTC timestamp literal string.");
+  }
+  const trimmed = openEndSql.trim();
+  const tsMatch = VALID_TIMESTAMP_LITERAL_REGEX.exec(trimmed);
+  if (tsMatch) {
+    return `TIMESTAMP('${tsMatch[1]}')`;
+  }
+  const isoMatch = VALID_ISO_UTC_REGEX.exec(trimmed);
+  if (isoMatch) {
+    return `TIMESTAMP('${isoMatch[1]}')`;
+  }
+  throw new Error(
+    `Invalid openEndSql "${openEndSql}". Expected TIMESTAMP('YYYY-MM-DD HH:MM:SS UTC').`
+  );
+}
+
 function normalizeKeys(naturalKey) {
   if (Array.isArray(naturalKey)) {
-    const cleaned = naturalKey.map((key) => String(key).trim()).filter(Boolean);
-    if (cleaned.length === 0) {
+    if (naturalKey.length === 0) {
       throw new Error("naturalKey must contain at least one column.");
     }
-    return cleaned;
+    return naturalKey.map((key) => assertIdentifier(key, "naturalKey"));
   }
   if (typeof naturalKey === "string" && naturalKey.trim().length > 0) {
-    return [naturalKey.trim()];
+    return [assertIdentifier(naturalKey, "naturalKey")];
   }
   throw new Error("naturalKey must be a non-empty string or array.");
 }
 
 function scd2WindowColumnsSql(naturalKey, orderByColumn, openEndSql) {
-  if (typeof orderByColumn !== "string" || orderByColumn.trim().length === 0) {
-    throw new Error("orderByColumn must be a non-empty column name.");
-  }
-  const orderCol = orderByColumn.trim();
+  const orderCol = assertIdentifier(orderByColumn, "orderByColumn");
   const keys = normalizeKeys(naturalKey).join(", ");
+  const safeOpenEnd = normalizeOpenEndSql(openEndSql);
   const nextExpr = `LEAD(${orderCol}) OVER (PARTITION BY ${keys} ORDER BY ${orderCol} ASC)`;
-  const validToExpr = openEndSql
-    ? `COALESCE(${nextExpr}, ${openEndSql})`
+  const validToExpr = safeOpenEnd
+    ? `COALESCE(${nextExpr}, ${safeOpenEnd})`
     : nextExpr;
   return [
     `${orderCol} AS valid_from`,
@@ -38,24 +75,28 @@ function buildScd2Query(options) {
     orderByColumn,
     columns,
     openEndSql = "TIMESTAMP('9999-12-31 23:59:59 UTC')",
-    whereSql = ""
+    excludeDeletedColumn = ""
   } = options || {};
 
-  if (!sourceSql || !Array.isArray(columns) || columns.length === 0) {
-    throw new Error("buildScd2Query requires sourceSql and an explicit columns list.");
+  if (typeof sourceSql !== "string" || !VALID_RELATION_REGEX.test(sourceSql.trim())) {
+    throw new Error("buildScd2Query requires a valid CTE or backtick-quoted relation in sourceSql.");
   }
-  const projected = columns.map((col) => String(col).trim()).filter(Boolean);
-  if (projected.length === 0) {
-    throw new Error("buildScd2Query requires valid column names.");
+  if (!Array.isArray(columns) || columns.length === 0) {
+    throw new Error("buildScd2Query requires an explicit non-empty columns list.");
   }
-  const filterClause =
-    whereSql && whereSql.trim().length > 0 ? `\nWHERE ${whereSql.trim()}` : "";
+  const safeSource = sourceSql.trim();
+  const projected = columns.map((col) => assertIdentifier(col, "column"));
+  let filterClause = "";
+  if (excludeDeletedColumn !== undefined && excludeDeletedColumn !== null && excludeDeletedColumn !== "") {
+    const delCol = assertIdentifier(excludeDeletedColumn, "excludeDeletedColumn");
+    filterClause = `\nWHERE COALESCE(${delCol}, FALSE) = FALSE`;
+  }
 
   return [
     "SELECT",
     `  ${projected.join(",\n  ")},`,
     `  ${scd2WindowColumnsSql(naturalKey, orderByColumn, openEndSql)}`,
-    `FROM ${sourceSql}${filterClause}`
+    `FROM ${safeSource}${filterClause}`
   ].join("\n");
 }
 
