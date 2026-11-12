@@ -7,10 +7,13 @@ config {
   columns: {
     customer_id: "Unique CRM customer identifier.",
     customer_name: "Customer full display name.",
+    customer_email: "Customer email address.",
     customer_ic_number: "Customer national ID number.",
     segment: "Customer loyalty or tier segment.",
     country_code: "ISO 3166-1 alpha-2 country code.",
-    updated_at: "CDC event update timestamp.",
+    _ingested_at: "Bronze ingestion timestamp.",
+    _cdc_sequence_num: "Monotonic CDC ordering sequence number.",
+    _op_type: "Source write operation type.",
     _metadata_deleted: "Nullable Datastream or streaming CDC delete tombstone flag."
   }
 }

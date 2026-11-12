@@ -10,7 +10,7 @@ Use this recipe when `CODEOWNERS` review load or DAG compile time becomes a bott
 ## 1. Provision the New Repository
 
 1. Create a new repository such as `medallion-<domain>`.
-2. Copy `workflow_settings.yaml`, `includes/`, `tests/`, and `AGENTS.md`.
+2. Copy `workflow_settings.yaml`, `includes/`, `envs/`, `tests/`, and `AGENTS.md`.
 3. Ask the platform team to add a `google_dataform_repository` in `gcp-foundation` pointing to the new repo.
 
 ## 2. Replace Upstream Silver Refs With Declarations
@@ -22,7 +22,7 @@ Use this recipe when `CODEOWNERS` review load or DAG compile time becomes a bott
 ## 3. Enforce Partition Filters and Contracts
 
 1. Preserve `WHERE` partition filters on upstream Silver tables that set `requirePartitionFilter: true`.
-2. Keep Dataform `assertions` on every Gold mart.
+2. Keep Dataform `assertions` and `updatePartitionFilter` on every Gold mart.
 3. Add Dataplex quality rules in `quality/` for critical domain outputs.
 
 ## 4. Retire the Old Domain Folder

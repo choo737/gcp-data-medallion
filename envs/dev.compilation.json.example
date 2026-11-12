@@ -1,0 +1,23 @@
+{
+  "defaultDatabase": "example-dev-silver-project",
+  "defaultSchema": "silver",
+  "defaultLocation": "asia-southeast1",
+  "vars": {
+    "bronze_project": "example-dev-bronze-project",
+    "bronze_dataset": "bronze",
+    "silver_project": "example-dev-silver-project",
+    "silver_dataset": "silver",
+    "gold_project": "example-dev-gold-project",
+    "gold_dataset": "gold",
+    "gold_retail_project": "",
+    "gold_retail_dataset": "",
+    "pii_policy_tag": "",
+    "pii_restricted_policy_tag": "",
+    "pii_masked_policy_tag": "",
+    "allow_untagged_pii": "true",
+    "filter_cdc_deletes": "true",
+    "cdc_lookback_days": "7",
+    "include_stream_orders": "true",
+    "include_batch_orders": "false"
+  }
+}

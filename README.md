@@ -29,7 +29,7 @@ gh repo create acme-corp/gcp-data-medallion --private --template choo737/gcp-dat
 Terraform in `gcp-foundation` provisions the underlying Google Cloud platform infrastructure.
 
 - It creates the Bronze, Silver, and Gold GCP projects and BigQuery datasets.
-- It creates BigQuery Policy Tags for PII governance.
+- It creates dual-tier BigQuery Policy Tags (`restricted` and `masked`) for PII governance.
 - It provisions raw `google_bigquery_reservation` and `google_bigquery_reservation_assignment` resources in `modules/data/bigquery-reservations/`.
 - It provisions these resources directly instead of Cloud Foundation Fabric, which lacks a reservation module.
 - It creates a `google_dataform_repository` resource synced directly to this repository.
@@ -51,61 +51,80 @@ This repo omits `package.json` because Dataform v3 rejects setting `dataformCore
 
 ## Compilation Variables Contract
 
-Ten contract variables in `workflow_settings.yaml` connect Terraform outputs to SQLX definitions.
-
-An optional `filter_cdc_deletes` variable toggles `_metadata_deleted` tombstone filtering in Silver.
+Contract variables in `workflow_settings.yaml` connect Terraform outputs and ingestion paths to SQLX definitions.
 
 | Variable | Default Value | Purpose |
 | :--- | :--- | :--- |
-| `bronze_project` | `example-bronze-project` | GCP project holding raw Bronze tables |
-| `bronze_dataset` | `bronze_raw` | BigQuery dataset for Bronze declarations |
+| `bronze_project` | `your-bronze-project-id` | GCP project holding raw Bronze tables |
+| `bronze_dataset` | `bronze` | BigQuery dataset for Bronze declarations |
 | `silver_project` | `example-silver-project` | GCP project holding conformed Silver tables |
-| `silver_dataset` | `silver_curated` | BigQuery dataset for Silver models |
+| `silver_dataset` | `silver` | BigQuery dataset for Silver models |
 | `gold_project` | `example-gold-project` | GCP project holding Gold business marts |
-| `gold_dataset` | `gold_mart` | BigQuery dataset for Gold marts |
+| `gold_dataset` | `gold` | BigQuery dataset for Gold marts |
 | `gold_retail_project` | `""` | Optional isolated GCP project for Retail Gold marts |
 | `gold_retail_dataset` | `""` | Optional isolated BigQuery dataset for Retail Gold marts |
-| `pii_policy_tag` | `""` | Optional BigQuery Policy Tag resource name |
-| `allow_untagged_pii` | `"true"` | Set to `"false"` in production to require Policy Tags |
+| `pii_policy_tag` | `""` | Backwards-compatible fallback BigQuery Policy Tag resource name |
+| `pii_restricted_policy_tag` | `""` | Restricted PII Policy Tag for national ID columns |
+| `pii_masked_policy_tag` | `""` | Masked PII Policy Tag for email and name columns |
+| `allow_untagged_pii` | `"true"` | Set to `"false"` in staging, prod, and strict CI dry runs |
 | `filter_cdc_deletes` | `"true"` | Optional CDC tombstone filter toggle (`"false"` skips `_metadata_deleted`) |
+| `cdc_lookback_days` | `"30"` | Rolling partition lookback window in days (`1..3650`) |
+| `include_stream_orders` | `"false"` | Set to `"true"` to union `pos_orders_stream_cdc` into `fct_orders` |
+| `include_batch_orders` | `"false"` | Set to `"true"` to union `pos_orders_batch_cdc` into `fct_orders` |
 
-When `allow_untagged_pii` is `"true"` and `pii_policy_tag` is `""`, `includes/policy_tags.js` returns only the column `description`.
+## Dual PII Policy Tags
 
-Set `allow_untagged_pii` to `"false"` in production so missing Policy Tags fail Dataform compilation.
+`includes/policy_tags.js` exports `piiRestrictedPolicyTag`, `piiMaskedPolicyTag`, and backwards-compatible `piiPolicyTag`.
+
+Both tier helpers validate full GCP Policy Tag resource paths when non-empty.
+
+Empty tags fail Dataform compilation whenever `allow_untagged_pii` is `"false"`.
+
+- `customer_ic_number` uses `piiRestrictedPolicyTag` in `fct_orders` and `dim_customers`.
+- `customer_email` and `customer_name` use `piiMaskedPolicyTag`.
+
+## Unified Orders and Late-CDC Protection
+
+Bronze declarations cover Datastream CDC (`pos_orders_cdc`), Pub/Sub streaming (`pos_orders_stream_cdc`), and GCS batch (`pos_orders_batch_cdc`).
+
+When `include_stream_orders` or `include_batch_orders` is `"true"`, `fct_orders` unions normalized rows before calling `cdc_helpers.deduplicateCdc`.
+
+`cdc_helpers.parseLookbackDays` validates `cdc_lookback_days` (`1..3650`) to block SQL injection.
+
+Both `updatePartitionFilter` and the incremental `WHERE` filter use the same `cdc_lookback_days` window.
+
+Keeping both windows equal prevents late CDC updates from creating duplicate `order_id` rows.
 
 By default, `filter_cdc_deletes` is `"true"` and `includes/cdc_helpers.js` filters out deleted rows.
 
 Set `filter_cdc_deletes` to `"false"` for legacy Bronze tables lacking `_metadata_deleted`.
 
-## CDC Tombstone Filtering
+## SCD Type 2 Change Deduplication
 
-Bronze declarations document nullable `_metadata_deleted` flags emitted by Datastream `APPEND_ONLY` and Pub/Sub CDC streams.
+`dim_customers` tracks `customer_ic_number`, `customer_email`, `customer_name`, `segment`, and `country_code` in `record_hash`.
 
-Silver models `fct_orders` and `dim_customers` use `includes/cdc_helpers.js` to exclude delete tombstones.
-
-`cdc_helpers.activeCdcFilter(alias)` validates optional table aliases against a strict identifier pattern before generating SQL.
-
-It compiles to `COALESCE(_metadata_deleted, FALSE) = FALSE` by default, or `TRUE` when `filter_cdc_deletes` is `"false"`.
+`scd_type2.scd2PreviousHashSql` removes consecutive unchanged CDC heartbeats before computing `LEAD(_ingested_at)` for `valid_to`.
 
 ## Medallion Architecture
 
 ```
 definitions/
-  01_bronze/      Raw CDC source declarations (no DDL)
-  02_silver/      Conformed tables and partition-filtered assertions
+  01_bronze/      Raw CDC, stream, and batch source declarations (no DDL)
+  02_silver/      Conformed incremental and SCD2 tables with partition-pruned assertions
   03_gold/
-    finance/      Finance domain aggregation marts
-    retail/       Retail store domain marts
+    finance/      Incremental finance revenue marts
+    retail/       Incremental retail store performance marts
+envs/             Per-environment Dataform compilation override examples
 includes/         Reusable Dataform JS macros
 quality/          Dataplex Auto Data Quality rule specs
 tests/            Hermetic Python integrity test suite
 ```
 
-1. **Bronze (`definitions/01_bronze/`)**: Holds Dataform `declaration` files only (`pos_orders_cdc`, `crm_customers_cdc`).
-2. **Silver (`definitions/02_silver/`)**: Conforms records (`fct_orders`, `dim_customers`) with deduplication, SCD Type 2 windows, Policy Tags, and assertions.
-3. **Gold (`definitions/03_gold/`)**: Aggregates Silver tables into partitioned marts (`mart_daily_revenue`, `mart_store_performance`) with partition filters.
+1. **Bronze (`definitions/01_bronze/`)**: Holds Dataform `declaration` files only (`pos_orders_cdc`, `pos_orders_stream_cdc`, `pos_orders_batch_cdc`, `crm_customers_cdc`).
+2. **Silver (`definitions/02_silver/`)**: Conforms `fct_orders` and `dim_customers` with deduplication, SCD2 windows, dual Policy Tags, and assertions.
+3. **Gold (`definitions/03_gold/`)**: Incrementally aggregates Silver into partitioned marts (`mart_daily_revenue`, `mart_store_performance`) with lookback pruning.
 
-Tables with `requirePartitionFilter: true` use standalone assertion `.sqlx` files (`assert_fct_orders_quality.sqlx`) with a partition predicate.
+Tables with `requirePartitionFilter: true` use standalone assertion `.sqlx` files (`assert_fct_orders_quality.sqlx`) pruned by `cdc_lookback_days`.
 
 ## Who Creates Bronze Tables
 
@@ -130,6 +149,15 @@ They never run DDL or create Bronze tables.
 > When splitting, Terraform in `gcp-foundation` provisions one `google_dataform_repository` per domain repository.
 > Each domain repository reads upstream Silver tables through Dataform `declaration` blocks.
 
+## Multi-Environment Promotion (`dev` to `staging` to `prod`)
+
+Per-environment Dataform overrides live under `envs/{dev,staging,prod}.compilation.json.example`.
+
+Workflow `.github/workflows/dataform-promote.yml` promotes Dataform releases via GitHub Environments and keyless OIDC WIF.
+
+- Pushes to `main` compile and update `dev-main`, then promote `staging-main` with strict PII checks.
+- Pushes of `v*` tags or manual `prod` dispatches compile immutable tags with `allow_untagged_pii: "false"` and patch `prod-main`.
+
 ## Local Validation
 
 Run the hermetic test suite before committing changes.
@@ -140,11 +168,11 @@ make test
 
 ## Keyless PR Compilation Check
 
-Workflow `.github/workflows/dataform-dryrun.yml` runs BigQuery Dataform compilation checks via GitHub OIDC Workload Identity Federation.
+Workflow `.github/workflows/dataform-dryrun.yml` runs offline hermetic checks unconditionally on every PR and push.
 
-It triggers on `workflow_dispatch` and `pull_request` events targeting `main`.
+When WIF variables exist, it calls Dataform GA `v1` `compilationResults` over OIDC.
 
-The workflow skips automatically when optional repository variables are unset in template clones.
+If `PII_MASKED_POLICY_TAG` and `PII_RESTRICTED_POLICY_TAG` are configured, it enforces `allow_untagged_pii: "false"`.
 
 | Repository Variable | Example Value | Purpose |
 | :--- | :--- | :--- |

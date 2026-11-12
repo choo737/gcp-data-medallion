@@ -1,0 +1,474 @@
+name: Dataform Multi-Environment Promotion
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Target promotion environment"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      git_commitish:
+        description: "Git branch, tag, or commit SHA"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  promote-dev:
+    if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_WIF_SERVICE_ACCOUNT != '' && vars.DATAFORM_REPO_PATH != '' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.target_env == 'dev'))
+    environment: dev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Compile and update dev release config
+        env:
+          TARGET_ENV: dev
+          DEFAULT_RELEASE_CONFIG: dev-main
+          DATAFORM_REPO_PATH: ${{ vars.DATAFORM_REPO_PATH }}
+          RELEASE_CONFIG_ID: ${{ vars.DATAFORM_RELEASE_CONFIG }}
+          GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          INPUT_GIT_COMMITISH: ${{ inputs.git_commitish }}
+          BRONZE_PROJECT: ${{ vars.BRONZE_PROJECT }}
+          SILVER_PROJECT: ${{ vars.SILVER_PROJECT }}
+          GOLD_PROJECT: ${{ vars.GOLD_PROJECT }}
+          PII_MASKED_POLICY_TAG: ${{ vars.PII_MASKED_POLICY_TAG }}
+          PII_RESTRICTED_POLICY_TAG: ${{ vars.PII_RESTRICTED_POLICY_TAG }}
+          REQUIRE_STRICT_PII: "false"
+        run: |
+          python3 - << 'EOF'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          def api_request(method, url, token, payload=None):
+              data = json.dumps(payload).encode("utf-8") if payload is not None else None
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  method=method,
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      return json.loads(resp.read().decode("utf-8"))
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", errors="replace")
+                  print(f"Dataform API {method} {url} failed (HTTP {exc.code}): {body}", file=sys.stderr)
+                  raise SystemExit(1) from exc
+
+          repo_path = os.environ["DATAFORM_REPO_PATH"].strip().strip("/")
+          if not re.fullmatch(
+              r"projects/[A-Za-z0-9-]+/locations/[A-Za-z0-9-]+/repositories/[A-Za-z0-9_-]+",
+              repo_path,
+          ):
+              raise SystemExit(f"Invalid DATAFORM_REPO_PATH: {repo_path!r}")
+
+          release_id = (os.environ.get("RELEASE_CONFIG_ID") or os.environ["DEFAULT_RELEASE_CONFIG"]).strip()
+          if not re.fullmatch(r"[A-Za-z0-9_-]+", release_id):
+              raise SystemExit(f"Invalid releaseConfig ID: {release_id!r}")
+
+          token = os.environ["GCP_ACCESS_TOKEN"].strip()
+          if not token:
+              raise SystemExit("Missing GCP_ACCESS_TOKEN.")
+
+          git_commitish = (
+              os.environ.get("INPUT_GIT_COMMITISH")
+              or os.environ.get("GITHUB_REF_NAME")
+              or "main"
+          ).strip()
+          if not re.fullmatch(r"[A-Za-z0-9_./-]+", git_commitish):
+              raise SystemExit(f"Invalid gitCommitish: {git_commitish!r}")
+
+          code_vars = {}
+          pii_masked = os.environ.get("PII_MASKED_POLICY_TAG", "").strip()
+          pii_restricted = os.environ.get("PII_RESTRICTED_POLICY_TAG", "").strip()
+          if pii_masked:
+              code_vars["pii_masked_policy_tag"] = pii_masked
+              code_vars["pii_policy_tag"] = pii_masked
+          if pii_restricted:
+              code_vars["pii_restricted_policy_tag"] = pii_restricted
+          if os.environ.get("REQUIRE_STRICT_PII") == "true" or (pii_masked and pii_restricted):
+              code_vars["allow_untagged_pii"] = "false"
+
+          for env_key, var_key in (
+              ("BRONZE_PROJECT", "bronze_project"),
+              ("SILVER_PROJECT", "silver_project"),
+              ("GOLD_PROJECT", "gold_project"),
+          ):
+              val = os.environ.get(env_key, "").strip()
+              if val:
+                  code_vars[var_key] = val
+
+          code_config = {}
+          silver_project = os.environ.get("SILVER_PROJECT", "").strip()
+          if silver_project:
+              code_config["defaultDatabase"] = silver_project
+          if code_vars:
+              code_config["vars"] = code_vars
+
+          release_path = f"{repo_path}/releaseConfigs/{release_id}"
+          release_url = f"https://dataform.googleapis.com/v1/{release_path}"
+          compile_url = f"https://dataform.googleapis.com/v1/{repo_path}/compilationResults"
+
+          patch_body = {"gitCommitish": git_commitish}
+          update_fields = ["gitCommitish"]
+          if code_config:
+              patch_body["codeCompilationConfig"] = code_config
+              update_fields.append("codeCompilationConfig")
+
+          mask = urllib.parse.quote(",".join(update_fields), safe=",")
+          api_request("PATCH", f"{release_url}?updateMask={mask}", token, patch_body)
+
+          result = api_request("POST", compile_url, token, {"releaseConfig": release_path})
+          errors = result.get("compilationErrors") or []
+          if errors:
+              for err in errors:
+                  print(f"Compilation error in {err.get('path', '<unknown>')}: {err.get('message', '')}", file=sys.stderr)
+              raise SystemExit(1)
+
+          comp_name = result.get("name", "").strip()
+          if not comp_name:
+              raise SystemExit("Compilation result did not return a resource name.")
+
+          api_request(
+              "PATCH",
+              f"{release_url}?updateMask=releaseCompilationResult",
+              token,
+              {"releaseCompilationResult": comp_name},
+          )
+          print(f"Promoted {os.environ['TARGET_ENV']} release {release_path} -> {comp_name}")
+          EOF
+
+  promote-staging:
+    needs: promote-dev
+    if: always() && vars.GCP_WIF_PROVIDER != '' && vars.GCP_WIF_SERVICE_ACCOUNT != '' && vars.DATAFORM_REPO_PATH != '' && ((github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.promote-dev.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.target_env == 'staging'))
+    environment: staging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Compile and update staging release config
+        env:
+          TARGET_ENV: staging
+          DEFAULT_RELEASE_CONFIG: staging-main
+          DATAFORM_REPO_PATH: ${{ vars.DATAFORM_REPO_PATH }}
+          RELEASE_CONFIG_ID: ${{ vars.DATAFORM_RELEASE_CONFIG }}
+          GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          INPUT_GIT_COMMITISH: ${{ inputs.git_commitish }}
+          BRONZE_PROJECT: ${{ vars.BRONZE_PROJECT }}
+          SILVER_PROJECT: ${{ vars.SILVER_PROJECT }}
+          GOLD_PROJECT: ${{ vars.GOLD_PROJECT }}
+          PII_MASKED_POLICY_TAG: ${{ vars.PII_MASKED_POLICY_TAG }}
+          PII_RESTRICTED_POLICY_TAG: ${{ vars.PII_RESTRICTED_POLICY_TAG }}
+          REQUIRE_STRICT_PII: "true"
+        run: |
+          python3 - << 'EOF'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          def api_request(method, url, token, payload=None):
+              data = json.dumps(payload).encode("utf-8") if payload is not None else None
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  method=method,
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      return json.loads(resp.read().decode("utf-8"))
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", errors="replace")
+                  print(f"Dataform API {method} {url} failed (HTTP {exc.code}): {body}", file=sys.stderr)
+                  raise SystemExit(1) from exc
+
+          repo_path = os.environ["DATAFORM_REPO_PATH"].strip().strip("/")
+          if not re.fullmatch(
+              r"projects/[A-Za-z0-9-]+/locations/[A-Za-z0-9-]+/repositories/[A-Za-z0-9_-]+",
+              repo_path,
+          ):
+              raise SystemExit(f"Invalid DATAFORM_REPO_PATH: {repo_path!r}")
+
+          release_id = (os.environ.get("RELEASE_CONFIG_ID") or os.environ["DEFAULT_RELEASE_CONFIG"]).strip()
+          if not re.fullmatch(r"[A-Za-z0-9_-]+", release_id):
+              raise SystemExit(f"Invalid releaseConfig ID: {release_id!r}")
+
+          token = os.environ["GCP_ACCESS_TOKEN"].strip()
+          if not token:
+              raise SystemExit("Missing GCP_ACCESS_TOKEN.")
+
+          git_commitish = (
+              os.environ.get("INPUT_GIT_COMMITISH")
+              or os.environ.get("GITHUB_REF_NAME")
+              or "main"
+          ).strip()
+          if not re.fullmatch(r"[A-Za-z0-9_./-]+", git_commitish):
+              raise SystemExit(f"Invalid gitCommitish: {git_commitish!r}")
+
+          code_vars = {"allow_untagged_pii": "false"}
+          pii_masked = os.environ.get("PII_MASKED_POLICY_TAG", "").strip()
+          pii_restricted = os.environ.get("PII_RESTRICTED_POLICY_TAG", "").strip()
+          if pii_masked:
+              code_vars["pii_masked_policy_tag"] = pii_masked
+              code_vars["pii_policy_tag"] = pii_masked
+          if pii_restricted:
+              code_vars["pii_restricted_policy_tag"] = pii_restricted
+
+          for env_key, var_key in (
+              ("BRONZE_PROJECT", "bronze_project"),
+              ("SILVER_PROJECT", "silver_project"),
+              ("GOLD_PROJECT", "gold_project"),
+          ):
+              val = os.environ.get(env_key, "").strip()
+              if val:
+                  code_vars[var_key] = val
+
+          code_config = {"vars": code_vars}
+          silver_project = os.environ.get("SILVER_PROJECT", "").strip()
+          if silver_project:
+              code_config["defaultDatabase"] = silver_project
+
+          release_path = f"{repo_path}/releaseConfigs/{release_id}"
+          release_url = f"https://dataform.googleapis.com/v1/{release_path}"
+          compile_url = f"https://dataform.googleapis.com/v1/{repo_path}/compilationResults"
+
+          patch_body = {
+              "gitCommitish": git_commitish,
+              "codeCompilationConfig": code_config,
+          }
+          api_request(
+              "PATCH",
+              f"{release_url}?updateMask=gitCommitish,codeCompilationConfig",
+              token,
+              patch_body,
+          )
+
+          result = api_request("POST", compile_url, token, {"releaseConfig": release_path})
+          errors = result.get("compilationErrors") or []
+          if errors:
+              for err in errors:
+                  print(f"Compilation error in {err.get('path', '<unknown>')}: {err.get('message', '')}", file=sys.stderr)
+              raise SystemExit(1)
+
+          comp_name = result.get("name", "").strip()
+          if not comp_name:
+              raise SystemExit("Compilation result did not return a resource name.")
+
+          api_request(
+              "PATCH",
+              f"{release_url}?updateMask=releaseCompilationResult",
+              token,
+              {"releaseCompilationResult": comp_name},
+          )
+          print(f"Promoted {os.environ['TARGET_ENV']} release {release_path} -> {comp_name}")
+          EOF
+
+  promote-prod:
+    if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_WIF_SERVICE_ACCOUNT != '' && vars.DATAFORM_REPO_PATH != '' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target_env == 'prod'))
+    environment: prod
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Verify immutable tag and promote prod release
+        env:
+          TARGET_ENV: prod
+          DEFAULT_RELEASE_CONFIG: prod-main
+          DATAFORM_REPO_PATH: ${{ vars.DATAFORM_REPO_PATH }}
+          RELEASE_CONFIG_ID: ${{ vars.DATAFORM_RELEASE_CONFIG }}
+          GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          INPUT_GIT_COMMITISH: ${{ inputs.git_commitish }}
+          BRONZE_PROJECT: ${{ vars.BRONZE_PROJECT }}
+          SILVER_PROJECT: ${{ vars.SILVER_PROJECT }}
+          GOLD_PROJECT: ${{ vars.GOLD_PROJECT }}
+          PII_MASKED_POLICY_TAG: ${{ vars.PII_MASKED_POLICY_TAG }}
+          PII_RESTRICTED_POLICY_TAG: ${{ vars.PII_RESTRICTED_POLICY_TAG }}
+        run: |
+          python3 - << 'EOF'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.request
+
+          def api_request(method, url, token, payload=None):
+              data = json.dumps(payload).encode("utf-8") if payload is not None else None
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  method=method,
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      return json.loads(resp.read().decode("utf-8"))
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", errors="replace")
+                  print(f"Dataform API {method} {url} failed (HTTP {exc.code}): {body}", file=sys.stderr)
+                  raise SystemExit(1) from exc
+
+          repo_path = os.environ["DATAFORM_REPO_PATH"].strip().strip("/")
+          if not re.fullmatch(
+              r"projects/[A-Za-z0-9-]+/locations/[A-Za-z0-9-]+/repositories/[A-Za-z0-9_-]+",
+              repo_path,
+          ):
+              raise SystemExit(f"Invalid DATAFORM_REPO_PATH: {repo_path!r}")
+
+          release_id = (os.environ.get("RELEASE_CONFIG_ID") or os.environ["DEFAULT_RELEASE_CONFIG"]).strip()
+          if release_id not in ("prod-main", "prod-release") and not re.fullmatch(r"[A-Za-z0-9_-]+", release_id):
+              raise SystemExit(f"Invalid releaseConfig ID: {release_id!r}")
+
+          token = os.environ["GCP_ACCESS_TOKEN"].strip()
+          if not token:
+              raise SystemExit("Missing GCP_ACCESS_TOKEN.")
+
+          git_commitish = (
+              os.environ.get("INPUT_GIT_COMMITISH")
+              or os.environ.get("GITHUB_REF_NAME")
+              or ""
+          ).strip()
+          if not git_commitish or not re.fullmatch(r"[A-Za-z0-9_./-]+", git_commitish):
+              raise SystemExit(f"Invalid immutable tag or gitCommitish for prod: {git_commitish!r}")
+
+          code_vars = {"allow_untagged_pii": "false"}
+          pii_masked = os.environ.get("PII_MASKED_POLICY_TAG", "").strip()
+          pii_restricted = os.environ.get("PII_RESTRICTED_POLICY_TAG", "").strip()
+          if pii_masked:
+              code_vars["pii_masked_policy_tag"] = pii_masked
+              code_vars["pii_policy_tag"] = pii_masked
+          if pii_restricted:
+              code_vars["pii_restricted_policy_tag"] = pii_restricted
+
+          for env_key, var_key in (
+              ("BRONZE_PROJECT", "bronze_project"),
+              ("SILVER_PROJECT", "silver_project"),
+              ("GOLD_PROJECT", "gold_project"),
+          ):
+              val = os.environ.get(env_key, "").strip()
+              if val:
+                  code_vars[var_key] = val
+
+          code_config = {"vars": code_vars}
+          silver_project = os.environ.get("SILVER_PROJECT", "").strip()
+          if silver_project:
+              code_config["defaultDatabase"] = silver_project
+
+          compile_url = f"https://dataform.googleapis.com/v1/{repo_path}/compilationResults"
+          release_path = f"{repo_path}/releaseConfigs/{release_id}"
+          release_url = f"https://dataform.googleapis.com/v1/{release_path}"
+
+          # Verify immutable tag compilation with allow_untagged_pii=false before updating releaseConfig.
+          verify_res = api_request(
+              "POST",
+              compile_url,
+              token,
+              {"gitCommitish": git_commitish, "codeCompilationConfig": code_config},
+          )
+          verify_errors = verify_res.get("compilationErrors") or []
+          if verify_errors:
+              for err in verify_errors:
+                  print(f"Compilation error in {err.get('path', '<unknown>')}: {err.get('message', '')}", file=sys.stderr)
+              raise SystemExit(1)
+
+          api_request(
+              "PATCH",
+              f"{release_url}?updateMask=gitCommitish,codeCompilationConfig",
+              token,
+              {"gitCommitish": git_commitish, "codeCompilationConfig": code_config},
+          )
+
+          rel_compile_res = api_request("POST", compile_url, token, {"releaseConfig": release_path})
+          rel_errors = rel_compile_res.get("compilationErrors") or []
+          if rel_errors:
+              for err in rel_errors:
+                  print(f"Release compilation error in {err.get('path', '<unknown>')}: {err.get('message', '')}", file=sys.stderr)
+              raise SystemExit(1)
+
+          comp_name = rel_compile_res.get("name", "").strip()
+          if not comp_name:
+              raise SystemExit("Release compilation result did not return a resource name.")
+
+          api_request(
+              "PATCH",
+              f"{release_url}?updateMask=releaseCompilationResult",
+              token,
+              {"releaseCompilationResult": comp_name},
+          )
+          print(f"Promoted prod {release_path} ({git_commitish}) -> {comp_name}")
+          EOF

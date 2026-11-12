@@ -67,27 +67,44 @@ jobs:
           );
 
           const sampleTag = "projects/example-project/locations/asia-southeast1/taxonomies/111/policyTags/222";
-          global.dataform = { projectConfig: { vars: { pii_policy_tag: sampleTag, allow_untagged_pii: "false" } } };
+          const restrictedTag = "projects/example-project/locations/asia-southeast1/taxonomies/111/policyTags/333";
+          global.dataform = {
+            projectConfig: {
+              vars: {
+                pii_policy_tag: sampleTag,
+                pii_restricted_policy_tag: restrictedTag,
+                pii_masked_policy_tag: sampleTag,
+                allow_untagged_pii: "false"
+              }
+            }
+          };
           assert.deepStrictEqual(policyTags.piiColumnConfig("Customer national ID"), {
             description: "Customer national ID",
             bigqueryPolicyTags: [sampleTag]
           });
+          assert.deepStrictEqual(policyTags.piiRestrictedPolicyTag(), [restrictedTag]);
+          assert.deepStrictEqual(policyTags.piiMaskedPolicyTag(), [sampleTag]);
+          assert.deepStrictEqual(policyTags.piiPolicyTag(), [sampleTag]);
 
           const scdSql = scd2.buildScd2Query({
-            sourceSql: "`example-bronze-project.bronze_raw.crm_customers_cdc`",
+            sourceSql: "`example-bronze-project.bronze.crm_customers_cdc`",
             naturalKey: "customer_id",
-            orderByColumn: "updated_at",
-            columns: ["customer_id", "segment", "updated_at"]
+            orderByColumn: ["_ingested_at", "_cdc_sequence_num"],
+            columns: ["customer_id", "segment", "_ingested_at"]
           });
           assert(scdSql.includes("AS valid_from"));
           assert(scdSql.includes("AS valid_to"));
           assert(scdSql.includes("AS is_current"));
+          assert(scdSql.includes("ORDER BY _ingested_at ASC, _cdc_sequence_num ASC"));
 
-          global.dataform = { projectConfig: { vars: { filter_cdc_deletes: "true" } } };
+          global.dataform = { projectConfig: { vars: { filter_cdc_deletes: "true", cdc_lookback_days: "30" } } };
           assert.strictEqual(cdc.filterCdcDeletes(), true);
+          assert.strictEqual(cdc.lookbackDays(), 30);
+          assert.strictEqual(cdc.parseLookbackDays("14"), 14);
           assert.strictEqual(cdc.activeCdcFilter(), "COALESCE(_metadata_deleted, FALSE) = FALSE");
           assert.strictEqual(cdc.activeCdcFilter("src"), "COALESCE(src._metadata_deleted, FALSE) = FALSE");
           assert.throws(() => cdc.activeCdcFilter("src; DROP TABLE x"), /Invalid SQL table alias/);
+          assert.throws(() => cdc.parseLookbackDays("3651"), /out of range/);
 
           global.dataform = { projectConfig: { vars: { filter_cdc_deletes: "false" } } };
           assert.strictEqual(cdc.filterCdcDeletes(), false);

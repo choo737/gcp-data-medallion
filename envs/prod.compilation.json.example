@@ -1,0 +1,23 @@
+{
+  "defaultDatabase": "example-prod-silver-project",
+  "defaultSchema": "silver",
+  "defaultLocation": "asia-southeast1",
+  "vars": {
+    "bronze_project": "example-prod-bronze-project",
+    "bronze_dataset": "bronze",
+    "silver_project": "example-prod-silver-project",
+    "silver_dataset": "silver",
+    "gold_project": "example-prod-gold-project",
+    "gold_dataset": "gold",
+    "gold_retail_project": "example-prod-retail-project",
+    "gold_retail_dataset": "gold_retail",
+    "pii_policy_tag": "projects/example-prod-gov-project/locations/asia-southeast1/taxonomies/3001/policyTags/4001",
+    "pii_restricted_policy_tag": "projects/example-prod-gov-project/locations/asia-southeast1/taxonomies/3001/policyTags/4002",
+    "pii_masked_policy_tag": "projects/example-prod-gov-project/locations/asia-southeast1/taxonomies/3001/policyTags/4001",
+    "allow_untagged_pii": "false",
+    "filter_cdc_deletes": "true",
+    "cdc_lookback_days": "30",
+    "include_stream_orders": "true",
+    "include_batch_orders": "true"
+  }
+}

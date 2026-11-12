@@ -5,14 +5,32 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
   id-token: write
 
 jobs:
+  offline-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Run offline hermetic tests
+        run: python3 -m unittest discover -s tests -v
+
   dataform-compile-dryrun:
-    if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_WIF_SERVICE_ACCOUNT != '' && vars.DATAFORM_REPO_PATH != '' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: offline-validate
+    if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_WIF_SERVICE_ACCOUNT != '' && vars.DATAFORM_REPO_PATH != '' && (github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -35,6 +53,11 @@ jobs:
         env:
           DATAFORM_REPO_PATH: ${{ vars.DATAFORM_REPO_PATH }}
           GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          PII_MASKED_POLICY_TAG: ${{ vars.PII_MASKED_POLICY_TAG }}
+          PII_RESTRICTED_POLICY_TAG: ${{ vars.PII_RESTRICTED_POLICY_TAG }}
+          BRONZE_PROJECT: ${{ vars.BRONZE_PROJECT }}
+          SILVER_PROJECT: ${{ vars.SILVER_PROJECT }}
+          GOLD_PROJECT: ${{ vars.GOLD_PROJECT }}
         run: |
           python3 - << 'EOF'
           import json
@@ -61,8 +84,36 @@ jobs:
               or "main"
           )
 
+          code_vars = {}
+          pii_masked = os.environ.get("PII_MASKED_POLICY_TAG", "").strip()
+          pii_restricted = os.environ.get("PII_RESTRICTED_POLICY_TAG", "").strip()
+          if pii_masked and pii_restricted:
+              code_vars["pii_masked_policy_tag"] = pii_masked
+              code_vars["pii_restricted_policy_tag"] = pii_restricted
+              code_vars["pii_policy_tag"] = pii_masked
+              code_vars["allow_untagged_pii"] = "false"
+
+          for env_key, var_key in (
+              ("BRONZE_PROJECT", "bronze_project"),
+              ("SILVER_PROJECT", "silver_project"),
+              ("GOLD_PROJECT", "gold_project"),
+          ):
+              val = os.environ.get(env_key, "").strip()
+              if val:
+                  code_vars[var_key] = val
+
+          payload_obj = {"gitCommitish": git_commitish}
+          code_config = {}
+          silver_project = os.environ.get("SILVER_PROJECT", "").strip()
+          if silver_project:
+              code_config["defaultDatabase"] = silver_project
+          if code_vars:
+              code_config["vars"] = code_vars
+          if code_config:
+              payload_obj["codeCompilationConfig"] = code_config
+
           url = f"https://dataform.googleapis.com/v1/{repo_path}/compilationResults"
-          payload = json.dumps({"gitCommitish": git_commitish}).encode("utf-8")
+          payload = json.dumps(payload_obj).encode("utf-8")
           request = urllib.request.Request(
               url,
               data=payload,

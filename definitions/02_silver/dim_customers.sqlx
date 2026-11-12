@@ -12,54 +12,111 @@ config {
   },
   columns: {
     customer_id: "Unique CRM customer identifier.",
-    customer_name: policy_tags.piiColumnConfig("Customer full display name."),
-    customer_ic_number: policy_tags.piiColumnConfig("Customer national ID"),
+    customer_name: {
+      description: "Customer full display name.",
+      bigqueryPolicyTags: policy_tags.piiMaskedPolicyTag()
+    },
+    customer_email: {
+      description: "Customer email address.",
+      bigqueryPolicyTags: policy_tags.piiMaskedPolicyTag()
+    },
+    customer_ic_number: {
+      description: "Customer national ID number.",
+      bigqueryPolicyTags: policy_tags.piiRestrictedPolicyTag()
+    },
     segment: "Customer loyalty or tier segment.",
     country_code: "ISO 3166-1 alpha-2 country code.",
-    updated_at: "Source CDC event timestamp.",
+    _ingested_at: "Source CDC event ingestion timestamp.",
+    _cdc_sequence_num: "Monotonic CDC sequence number.",
+    _op_type: "Source write operation type.",
     valid_from: "Start timestamp of the dimension version.",
-    valid_to: "End timestamp of the dimension version.",
+    valid_to: "End timestamp of the dimension version (effective_to).",
     is_current: "True when this row is the latest active version.",
     ingested_at: "Silver ingestion timestamp.",
-    record_hash: "SHA-256 hash of customer dimension attributes."
+    record_hash: "SHA-256 hash of tracked customer dimension attributes."
   }
 }
 
-WITH deduplicated_cdc AS (
+js {
+  const trackedColumns = cdc_helpers.filterCdcDeletes() ? ["customer_id", "customer_name", "customer_email", "customer_ic_number", "segment", "country_code", "_metadata_deleted"] : ["customer_id", "customer_name", "customer_email", "customer_ic_number", "segment", "country_code"];
+}
+
+WITH raw_snapshots AS (
   SELECT
     customer_id,
     customer_name,
+    customer_email,
     customer_ic_number,
     segment,
     country_code,
-    updated_at${when(cdc_helpers.filterCdcDeletes(), ",\n    _metadata_deleted")}
+    _ingested_at,
+    _cdc_sequence_num,
+    _op_type${when(cdc_helpers.filterCdcDeletes(), ", _metadata_deleted")},
+    ${audit_columns.recordHashSql(trackedColumns)} AS record_hash
   FROM ${ref("crm_customers_cdc")}
   QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY customer_id, updated_at
-    ORDER BY updated_at DESC${when(cdc_helpers.filterCdcDeletes(), ", COALESCE(_metadata_deleted, FALSE) DESC")}
+    PARTITION BY customer_id, _ingested_at
+    ORDER BY _cdc_sequence_num DESC${when(cdc_helpers.filterCdcDeletes(), ", COALESCE(_metadata_deleted, FALSE) DESC")}
   ) = 1
+),
+snapshots_with_prev_hash AS (
+  SELECT
+    customer_id,
+    customer_name,
+    customer_email,
+    customer_ic_number,
+    segment,
+    country_code,
+    _ingested_at,
+    _cdc_sequence_num,
+    _op_type${when(cdc_helpers.filterCdcDeletes(), ", _metadata_deleted")},
+    record_hash,
+    ${scd_type2.scd2PreviousHashSql("customer_id", ["_ingested_at", "_cdc_sequence_num"], "record_hash")} AS prev_record_hash
+  FROM raw_snapshots
+),
+-- Drop consecutive unchanged CDC heartbeats before computing SCD Type 2 window bounds.
+changed_snapshots AS (
+  SELECT
+    customer_id,
+    customer_name,
+    customer_email,
+    customer_ic_number,
+    segment,
+    country_code,
+    _ingested_at,
+    _cdc_sequence_num,
+    _op_type${when(cdc_helpers.filterCdcDeletes(), ", _metadata_deleted")},
+    record_hash
+  FROM snapshots_with_prev_hash
+  WHERE prev_record_hash IS NULL OR prev_record_hash != record_hash
 ),
 scd2_versions AS (
   SELECT
     customer_id,
     customer_name,
+    customer_email,
     customer_ic_number,
     segment,
     country_code,
-    updated_at${when(cdc_helpers.filterCdcDeletes(), ",\n    _metadata_deleted")},
-    ${scd_type2.scd2WindowColumnsSql("customer_id", "updated_at", "TIMESTAMP('9999-12-31 23:59:59 UTC')")},
+    _ingested_at,
+    _cdc_sequence_num,
+    _op_type${when(cdc_helpers.filterCdcDeletes(), ", _metadata_deleted")},
+    ${scd_type2.scd2WindowColumnsSql("customer_id", ["_ingested_at", "_cdc_sequence_num"], "TIMESTAMP('9999-12-31 23:59:59 UTC')")},
     ${audit_columns.ingestedAtSql()} AS ingested_at,
-    ${audit_columns.recordHashSql(["customer_id", "customer_name", "segment", "country_code"])} AS record_hash
-  FROM deduplicated_cdc
+    record_hash
+  FROM changed_snapshots
 )
 
 SELECT
   customer_id,
   customer_name,
+  customer_email,
   customer_ic_number,
   segment,
   country_code,
-  updated_at,
+  _ingested_at,
+  _cdc_sequence_num,
+  _op_type,
   valid_from,
   valid_to,
   is_current,

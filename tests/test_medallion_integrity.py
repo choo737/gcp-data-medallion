@@ -1,6 +1,7 @@
 """Hermetic integrity tests for the gcp-data-medallion Dataform repository."""
 
 import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -20,7 +21,13 @@ REQUIRED_VARS = (
     "gold_retail_project",
     "gold_retail_dataset",
     "pii_policy_tag",
+    "pii_restricted_policy_tag",
+    "pii_masked_policy_tag",
     "allow_untagged_pii",
+    "filter_cdc_deletes",
+    "cdc_lookback_days",
+    "include_stream_orders",
+    "include_batch_orders",
 )
 
 REQUIRED_FILES = (
@@ -35,6 +42,10 @@ REQUIRED_FILES = (
     "GEMINI.md",
     ".github/workflows/ci.yml",
     ".github/workflows/dataform-dryrun.yml",
+    ".github/workflows/dataform-promote.yml",
+    "envs/dev.compilation.json.example",
+    "envs/staging.compilation.json.example",
+    "envs/prod.compilation.json.example",
     "includes/audit_columns.js",
     "includes/policy_tags.js",
     "includes/scd_type2.js",
@@ -43,6 +54,8 @@ REQUIRED_FILES = (
     ".agents/skills/add-medallion-model/SKILL.md",
     ".agents/skills/split-domain-mesh/SKILL.md",
     "definitions/01_bronze/pos_orders_cdc.sqlx",
+    "definitions/01_bronze/pos_orders_stream_cdc.sqlx",
+    "definitions/01_bronze/pos_orders_batch_cdc.sqlx",
     "definitions/01_bronze/crm_customers_cdc.sqlx",
     "definitions/02_silver/fct_orders.sqlx",
     "definitions/02_silver/assert_fct_orders_quality.sqlx",
@@ -345,8 +358,25 @@ def extract_markdown_prose_lines(markdown_text):
     return prose
 
 
+def run_node_script(script, label):
+    """Execute a Node.js verification script inside REPO_ROOT and assert zero exit code."""
+    node_bin = shutil.which("node")
+    if node_bin is None:
+        raise AssertionError("node CLI must be installed to execute JS helper tests.")
+    proc = subprocess.run(
+        [node_bin, "-e", script],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"{label} failed:\n{proc.stderr or proc.stdout}")
+    return proc.stdout
+
+
 class MedallionIntegrityTest(unittest.TestCase):
-    """Validate Dataform config, SQLX medallion contracts, docs, and repository hygiene."""
+    """Validate Dataform config, SQLX medallion contracts, CI/CD, docs, and hygiene."""
 
     def test_required_repository_files_exist(self):
         for rel_path in REQUIRED_FILES:
@@ -379,9 +409,18 @@ class MedallionIntegrityTest(unittest.TestCase):
         vars_map = workflow["vars"]
         for var_name in REQUIRED_VARS:
             self.assertIn(var_name, vars_map, f"Missing contract var '{var_name}'.")
+        self.assertEqual(vars_map["bronze_project"], "your-bronze-project-id")
+        self.assertEqual(vars_map["bronze_dataset"], "bronze")
+        self.assertEqual(vars_map["silver_dataset"], "silver")
+        self.assertEqual(vars_map["gold_dataset"], "gold")
         self.assertEqual(vars_map["pii_policy_tag"], "")
+        self.assertEqual(vars_map["pii_restricted_policy_tag"], "")
+        self.assertEqual(vars_map["pii_masked_policy_tag"], "")
         self.assertEqual(vars_map["allow_untagged_pii"], "true")
-        self.assertEqual(vars_map.get("filter_cdc_deletes"), "true")
+        self.assertEqual(vars_map["filter_cdc_deletes"], "true")
+        self.assertEqual(vars_map["cdc_lookback_days"], "30")
+        self.assertEqual(vars_map["include_stream_orders"], "false")
+        self.assertEqual(vars_map["include_batch_orders"], "false")
 
     def test_includes_helpers_present(self):
         node_bin = shutil.which("node")
@@ -389,9 +428,25 @@ class MedallionIntegrityTest(unittest.TestCase):
 
         expected_exports = {
             "includes/audit_columns.js": ("ingestedAtSql", "recordHashSql"),
-            "includes/policy_tags.js": ("allowUntaggedPii", "piiColumnConfig"),
-            "includes/scd_type2.js": ("scd2WindowColumnsSql", "buildScd2Query"),
-            "includes/cdc_helpers.js": ("filterCdcDeletes", "activeCdcFilter"),
+            "includes/policy_tags.js": (
+                "allowUntaggedPii",
+                "piiRestrictedPolicyTag",
+                "piiMaskedPolicyTag",
+                "piiPolicyTag",
+                "piiColumnConfig",
+            ),
+            "includes/scd_type2.js": (
+                "scd2PreviousHashSql",
+                "scd2WindowColumnsSql",
+                "buildScd2Query",
+            ),
+            "includes/cdc_helpers.js": (
+                "filterCdcDeletes",
+                "activeCdcFilter",
+                "parseLookbackDays",
+                "lookbackDays",
+                "deduplicateCdc",
+            ),
         }
         for rel_path, symbols in expected_exports.items():
             full_path = REPO_ROOT / rel_path
@@ -412,59 +467,385 @@ class MedallionIntegrityTest(unittest.TestCase):
                 f"node --check failed for {rel_path}: {proc.stderr or proc.stdout}",
             )
 
-        cdc_helper = (REPO_ROOT / "includes/cdc_helpers.js").read_text(encoding="utf-8")
-        self.assertIn("/^[A-Za-z_][A-Za-z0-9_]*$/", cdc_helper)
+        for helper_path in (
+            "includes/cdc_helpers.js",
+            "includes/scd_type2.js",
+            "includes/audit_columns.js",
+        ):
+            helper_text = (REPO_ROOT / helper_path).read_text(encoding="utf-8")
+            self.assertIn("/^[A-Za-z_][A-Za-z0-9_]*$/", helper_text)
 
     def test_cdc_helpers_runtime_behavior(self):
-        node_bin = shutil.which("node")
-        self.assertIsNotNone(node_bin, "node CLI must be installed to test includes/cdc_helpers.js.")
         script = """
 const assert = require("assert");
 const cdc = require("./includes/cdc_helpers");
 
 global.dataform = { projectConfig: { vars: {} } };
 assert.strictEqual(cdc.filterCdcDeletes(), true);
+assert.strictEqual(cdc.lookbackDays(), 30);
 assert.strictEqual(cdc.activeCdcFilter(), "COALESCE(_metadata_deleted, FALSE) = FALSE");
 assert.strictEqual(cdc.activeCdcFilter(""), "COALESCE(_metadata_deleted, FALSE) = FALSE");
 assert.strictEqual(cdc.activeCdcFilter("src"), "COALESCE(src._metadata_deleted, FALSE) = FALSE");
 
-global.dataform = { projectConfig: { vars: { filter_cdc_deletes: "true" } } };
+global.dataform = { projectConfig: { vars: { filter_cdc_deletes: "true", cdc_lookback_days: "14" } } };
 assert.strictEqual(cdc.filterCdcDeletes(), true);
+assert.strictEqual(cdc.lookbackDays(), 14);
 assert.strictEqual(cdc.activeCdcFilter("orders"), "COALESCE(orders._metadata_deleted, FALSE) = FALSE");
+
+assert.strictEqual(cdc.parseLookbackDays("1"), 1);
+assert.strictEqual(cdc.parseLookbackDays("30"), 30);
+assert.strictEqual(cdc.parseLookbackDays("3650"), 3650);
+assert.strictEqual(cdc.parseLookbackDays(7), 7);
+
+for (const badDays of ["0", "-1", "3651", "9999", "07", "30; DROP TABLE x", "30 DAY", "", null, undefined, {}, []]) {
+  assert.throws(() => cdc.parseLookbackDays(badDays), /cdc_lookback_days/);
+}
+global.dataform = { projectConfig: { vars: { cdc_lookback_days: "30 OR 1=1" } } };
+assert.throws(() => cdc.lookbackDays(), /cdc_lookback_days/);
 
 for (const badAlias of ["src; DROP TABLE x", "1bad", "a.b", " ", "src--comment"]) {
   assert.throws(() => cdc.activeCdcFilter(badAlias), /Invalid SQL table alias/);
 }
 assert.throws(() => cdc.activeCdcFilter(123), /must be a string/);
 
+global.dataform = { projectConfig: { vars: { filter_cdc_deletes: "true" } } };
+const dedupSql = cdc.deduplicateCdc(["order_id"], ["_ingested_at", "_cdc_sequence_num"]);
+assert(dedupSql.includes("PARTITION BY order_id"));
+assert(dedupSql.includes("ORDER BY _ingested_at DESC, _cdc_sequence_num DESC, COALESCE(_metadata_deleted, FALSE) DESC"));
+assert.throws(() => cdc.deduplicateCdc(["order_id; DROP TABLE x"]), /Invalid SQL keyColumn/);
+assert.throws(() => cdc.deduplicateCdc(["order_id"], ["_ingested_at DESC; --"]), /Invalid SQL orderColumn/);
+
 for (const offValue of ["false", "FALSE", false]) {
   global.dataform = { projectConfig: { vars: { filter_cdc_deletes: offValue } } };
   assert.strictEqual(cdc.filterCdcDeletes(), false);
   assert.strictEqual(cdc.activeCdcFilter(), "TRUE");
   assert.strictEqual(cdc.activeCdcFilter("src"), "TRUE");
+  const dedupNoDelete = cdc.deduplicateCdc("order_id");
+  assert.strictEqual(dedupNoDelete.includes("_metadata_deleted"), false);
   assert.throws(() => cdc.activeCdcFilter("src; DROP TABLE x"), /Invalid SQL table alias/);
 }
 """
-        proc = subprocess.run(
-            [node_bin, "-e", script],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(
-            proc.returncode,
-            0,
-            f"cdc_helpers runtime check failed: {proc.stderr or proc.stdout}",
-        )
+        run_node_script(script, "cdc_helpers runtime check")
+
+    def test_policy_tags_runtime_behavior(self):
+        script = """
+const assert = require("assert");
+const policyTags = require("./includes/policy_tags");
+
+const restrictedTag = "projects/example-gov/locations/asia-southeast1/taxonomies/1001/policyTags/2002";
+const maskedTag = "projects/example-gov/locations/asia-southeast1/taxonomies/1001/policyTags/2001";
+const legacyTag = "projects/example-gov/locations/asia-southeast1/taxonomies/1001/policyTags/2000";
+
+assert.deepStrictEqual(
+  policyTags.piiRestrictedPolicyTag({
+    pii_restricted_policy_tag: restrictedTag,
+    pii_masked_policy_tag: maskedTag,
+    allow_untagged_pii: "false"
+  }),
+  [restrictedTag]
+);
+assert.deepStrictEqual(
+  policyTags.piiMaskedPolicyTag({
+    pii_restricted_policy_tag: restrictedTag,
+    pii_masked_policy_tag: maskedTag,
+    allow_untagged_pii: "false"
+  }),
+  [maskedTag]
+);
+assert.deepStrictEqual(
+  policyTags.piiPolicyTag({
+    pii_masked_policy_tag: maskedTag,
+    allow_untagged_pii: "false"
+  }),
+  [maskedTag]
+);
+
+// Fallback to legacy pii_policy_tag when tier-specific variables are unset.
+assert.deepStrictEqual(
+  policyTags.piiRestrictedPolicyTag({ pii_policy_tag: legacyTag, allow_untagged_pii: "false" }),
+  [legacyTag]
+);
+assert.deepStrictEqual(
+  policyTags.piiMaskedPolicyTag({ pii_policy_tag: legacyTag, allow_untagged_pii: "false" }),
+  [legacyTag]
+);
+
+// Empty allowed when allow_untagged_pii is true.
+assert.deepStrictEqual(
+  policyTags.piiRestrictedPolicyTag({ pii_restricted_policy_tag: "", allow_untagged_pii: "true" }),
+  []
+);
+assert.deepStrictEqual(
+  policyTags.piiMaskedPolicyTag({ pii_masked_policy_tag: "", allow_untagged_pii: "true" }),
+  []
+);
+
+// Must throw when empty and allow_untagged_pii is false.
+assert.throws(
+  () => policyTags.piiRestrictedPolicyTag({ pii_restricted_policy_tag: "", pii_policy_tag: "", allow_untagged_pii: "false" }),
+  /pii_policy_tag is required/
+);
+assert.throws(
+  () => policyTags.piiMaskedPolicyTag({ pii_masked_policy_tag: "", pii_policy_tag: "", allow_untagged_pii: "false" }),
+  /pii_policy_tag is required/
+);
+
+// Reject invalid or injected policyTag resource paths even when allow_untagged_pii is true.
+for (const badTag of [
+  "invalid-tag",
+  "projects/bad_proj/locations/us/taxonomies/1/policyTags/2",
+  "projects/example-gov/locations/asia-southeast1/taxonomies/abc/policyTags/1",
+  restrictedTag + "'; DROP TABLE x; --"
+]) {
+  assert.throws(
+    () => policyTags.piiRestrictedPolicyTag({ pii_restricted_policy_tag: badTag, allow_untagged_pii: "true" }),
+    /Invalid pii_restricted_policy_tag/
+  );
+  assert.throws(
+    () => policyTags.piiMaskedPolicyTag({ pii_masked_policy_tag: badTag, allow_untagged_pii: "true" }),
+    /Invalid pii_masked_policy_tag/
+  );
+}
+
+// Globals fallback for Dataform config blocks.
+global.dataform = {
+  projectConfig: {
+    vars: {
+      pii_restricted_policy_tag: restrictedTag,
+      pii_masked_policy_tag: maskedTag,
+      allow_untagged_pii: "false"
+    }
+  }
+};
+assert.deepStrictEqual(policyTags.piiRestrictedPolicyTag(), [restrictedTag]);
+assert.deepStrictEqual(policyTags.piiMaskedPolicyTag(), [maskedTag]);
+assert.deepStrictEqual(policyTags.piiColumnConfig("Customer ID", "restricted"), {
+  description: "Customer ID",
+  bigqueryPolicyTags: [restrictedTag]
+});
+"""
+        run_node_script(script, "policy_tags runtime check")
+
+    def test_scd_type2_and_audit_columns_runtime_behavior(self):
+        script = """
+const assert = require("assert");
+const scd2 = require("./includes/scd_type2");
+const audit = require("./includes/audit_columns");
+
+assert.strictEqual(audit.ingestedAtSql(), "CURRENT_TIMESTAMP()");
+assert.strictEqual(
+  audit.recordHashSql(["customer_id", "customer_ic_number"]),
+  "TO_HEX(SHA256(TO_JSON_STRING(STRUCT(customer_id, customer_ic_number))))"
+);
+assert.throws(() => audit.recordHashSql([]), /non-empty column list/);
+assert.throws(() => audit.recordHashSql(["customer_id; DROP TABLE x"]), /Invalid SQL identifier/);
+
+const lagExpr = scd2.scd2PreviousHashSql("customer_id", ["_ingested_at", "_cdc_sequence_num"], "record_hash");
+assert.strictEqual(
+  lagExpr,
+  "LAG(record_hash) OVER (PARTITION BY customer_id ORDER BY _ingested_at ASC, _cdc_sequence_num ASC)"
+);
+assert.throws(
+  () => scd2.scd2PreviousHashSql("customer_id; --", ["_ingested_at"]),
+  /Invalid SQL identifier/
+);
+assert.throws(
+  () => scd2.scd2PreviousHashSql("customer_id", ["_ingested_at; --"]),
+  /Invalid SQL identifier/
+);
+
+const winCols = scd2.scd2WindowColumnsSql(
+  "customer_id",
+  ["_ingested_at", "_cdc_sequence_num"],
+  "TIMESTAMP('9999-12-31 23:59:59 UTC')"
+);
+assert(winCols.includes("_ingested_at AS valid_from"));
+assert(winCols.includes("LEAD(_ingested_at) OVER (PARTITION BY customer_id ORDER BY _ingested_at ASC, _cdc_sequence_num ASC)"));
+assert(winCols.includes("AS valid_to"));
+assert(winCols.includes("AS is_current"));
+
+const query = scd2.buildScd2Query({
+  sourceSql: "changed_snapshots",
+  naturalKey: "customer_id",
+  orderByColumn: ["_ingested_at", "_cdc_sequence_num"],
+  columns: ["customer_id", "customer_ic_number", "_ingested_at"],
+  excludeDeletedColumn: "_metadata_deleted"
+});
+assert(query.includes("FROM changed_snapshots"));
+assert(query.includes("WHERE COALESCE(_metadata_deleted, FALSE) = FALSE"));
+assert.throws(() => scd2.buildScd2Query({ sourceSql: "x; DROP TABLE y", naturalKey: "id", orderByColumn: "ts", columns: ["id"] }), /valid CTE/);
+"""
+        run_node_script(script, "scd_type2 and audit_columns runtime check")
+
+    def test_sqlx_template_evaluation_with_node(self):
+        script = r"""
+const assert = require("assert");
+const fs = require("fs");
+const vm = require("vm");
+const audit_columns = require("./includes/audit_columns");
+const cdc_helpers = require("./includes/cdc_helpers");
+const policy_tags = require("./includes/policy_tags");
+const scd_type2 = require("./includes/scd_type2");
+
+function splitSqlx(filePath) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const cfgStart = raw.indexOf("config {");
+  let depth = 0;
+  let cfgEnd = -1;
+  for (let i = raw.indexOf("{", cfgStart); i < raw.length; i++) {
+    if (raw[i] === "{") depth++;
+    else if (raw[i] === "}") {
+      depth--;
+      if (depth === 0) { cfgEnd = i + 1; break; }
+    }
+  }
+  const cfgExpr = "(" + raw.slice(raw.indexOf("{", cfgStart), cfgEnd) + ")";
+  let body = raw.slice(cfgEnd).trim();
+  let jsSetup = "";
+  if (body.startsWith("js {")) {
+    let jdepth = 0;
+    let jEnd = -1;
+    for (let i = body.indexOf("{"); i < body.length; i++) {
+      if (body[i] === "{") jdepth++;
+      else if (body[i] === "}") {
+        jdepth--;
+        if (jdepth === 0) { jEnd = i + 1; break; }
+      }
+    }
+    jsSetup = body.slice(body.indexOf("{") + 1, jEnd - 1);
+    body = body.slice(jEnd).trim();
+  }
+  return { cfgExpr, jsSetup, body };
+}
+
+function evalSqlx(filePath, vars, isIncremental) {
+  global.dataform = { projectConfig: { vars } };
+  const { cfgExpr, jsSetup, body } = splitSqlx(filePath);
+  const ctx = vm.createContext({
+    dataform: global.dataform,
+    audit_columns,
+    cdc_helpers,
+    policy_tags,
+    scd_type2,
+    ref: (name) => "`proj.ds." + name + "`",
+    self: () => "`proj.ds.self`",
+    when: (cond, a, b = "") => (cond ? a : b),
+    incremental: () => isIncremental
+  });
+  const cfg = vm.runInContext(cfgExpr, ctx);
+  if (jsSetup) {
+    vm.runInContext(jsSetup, ctx);
+  }
+  const escaped = body.replace(/\\/g, "\\\\").replace(/`/g, "\\`");
+  const sql = vm.runInContext("`" + escaped + "`", ctx);
+  return { cfg, sql };
+}
+
+const restrictedTag = "projects/p/locations/asia-southeast1/taxonomies/1/policyTags/2";
+const maskedTag = "projects/p/locations/asia-southeast1/taxonomies/1/policyTags/3";
+
+// 1. Default CDC-only fct_orders (include_stream_orders=false, include_batch_orders=false)
+const fctDefault = evalSqlx("definitions/02_silver/fct_orders.sqlx", {
+  silver_project: "p",
+  silver_dataset: "silver",
+  pii_restricted_policy_tag: restrictedTag,
+  pii_masked_policy_tag: maskedTag,
+  allow_untagged_pii: "false",
+  filter_cdc_deletes: "true",
+  cdc_lookback_days: "30",
+  include_stream_orders: "false",
+  include_batch_orders: "false"
+}, true);
+assert.strictEqual(fctDefault.cfg.bigquery.updatePartitionFilter, "order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)");
+assert(fctDefault.sql.includes("WHERE DATE(order_date) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)"));
+assert(!fctDefault.sql.includes("pos_orders_stream_cdc"));
+assert(!fctDefault.sql.includes("pos_orders_batch_cdc"));
+assert.deepStrictEqual(Array.from(fctDefault.cfg.columns.customer_ic_number.bigqueryPolicyTags), [restrictedTag]);
+assert.deepStrictEqual(Array.from(fctDefault.cfg.columns.customer_email.bigqueryPolicyTags), [maskedTag]);
+
+// 2. Unified CDC + Stream + Batch fct_orders with 14-day lookback
+const fctUnified = evalSqlx("definitions/02_silver/fct_orders.sqlx", {
+  silver_project: "p",
+  silver_dataset: "silver",
+  pii_restricted_policy_tag: restrictedTag,
+  pii_masked_policy_tag: maskedTag,
+  allow_untagged_pii: "false",
+  filter_cdc_deletes: "true",
+  cdc_lookback_days: "14",
+  include_stream_orders: "true",
+  include_batch_orders: "true"
+}, true);
+assert.strictEqual(fctUnified.cfg.bigquery.updatePartitionFilter, "order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)");
+const matches = fctUnified.sql.match(/WHERE DATE\(order_date\) >= DATE_SUB\(CURRENT_DATE\(\), INTERVAL 14 DAY\)/g) || [];
+assert.strictEqual(matches.length, 3);
+assert(fctUnified.sql.includes("pos_orders_stream_cdc"));
+assert(fctUnified.sql.includes("pos_orders_batch_cdc"));
+const batchIdx = fctUnified.sql.indexOf("pos_orders_batch_cdc");
+const qualifyIdx = fctUnified.sql.indexOf("QUALIFY ROW_NUMBER()");
+assert(batchIdx > -1 && qualifyIdx > -1 && batchIdx < qualifyIdx);
+
+// 3. Invalid lookback days must fail compilation
+assert.throws(() => evalSqlx("definitions/02_silver/fct_orders.sqlx", {
+  cdc_lookback_days: "7; DROP TABLE x",
+  allow_untagged_pii: "true"
+}, true), /cdc_lookback_days/);
+
+// 4. dim_customers SCD2 change-only hash deduplication + IC tracking + dual PII tags
+const dimRes = evalSqlx("definitions/02_silver/dim_customers.sqlx", {
+  silver_project: "p",
+  silver_dataset: "silver",
+  pii_restricted_policy_tag: restrictedTag,
+  pii_masked_policy_tag: maskedTag,
+  allow_untagged_pii: "false",
+  filter_cdc_deletes: "true"
+}, false);
+assert.deepStrictEqual(Array.from(dimRes.cfg.columns.customer_ic_number.bigqueryPolicyTags), [restrictedTag]);
+assert.deepStrictEqual(Array.from(dimRes.cfg.columns.customer_email.bigqueryPolicyTags), [maskedTag]);
+assert.deepStrictEqual(Array.from(dimRes.cfg.columns.customer_name.bigqueryPolicyTags), [maskedTag]);
+assert(dimRes.sql.includes("STRUCT(customer_id, customer_name, customer_email, customer_ic_number, segment, country_code, _metadata_deleted)"));
+assert(dimRes.sql.includes("LAG(record_hash) OVER (PARTITION BY customer_id ORDER BY _ingested_at ASC, _cdc_sequence_num ASC)"));
+const filterIdx = dimRes.sql.indexOf("prev_record_hash != record_hash");
+const leadIdx = dimRes.sql.indexOf("LEAD(_ingested_at)");
+assert(filterIdx > -1 && leadIdx > -1 && filterIdx < leadIdx);
+
+// 5. Gold marts and Silver assertion
+const revRes = evalSqlx("definitions/03_gold/finance/mart_daily_revenue.sqlx", {
+  gold_project: "p",
+  gold_dataset: "gold",
+  cdc_lookback_days: "14"
+}, true);
+assert.strictEqual(revRes.cfg.type, "incremental");
+assert.deepStrictEqual(Array.from(revRes.cfg.uniqueKey), ["order_date", "currency_code"]);
+assert.strictEqual(revRes.cfg.bigquery.updatePartitionFilter, "order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)");
+assert(revRes.sql.includes("order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)"));
+
+const storeRes = evalSqlx("definitions/03_gold/retail/mart_store_performance.sqlx", {
+  gold_project: "p",
+  gold_dataset: "gold",
+  gold_retail_project: "",
+  gold_retail_dataset: "",
+  cdc_lookback_days: "14"
+}, true);
+assert.strictEqual(storeRes.cfg.type, "incremental");
+assert.deepStrictEqual(Array.from(storeRes.cfg.uniqueKey), ["order_date", "store_id", "currency_code"]);
+assert.strictEqual(storeRes.cfg.bigquery.updatePartitionFilter, "order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)");
+assert(storeRes.sql.includes("order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)"));
+
+const assertRes = evalSqlx("definitions/02_silver/assert_fct_orders_quality.sqlx", {
+  silver_project: "p",
+  cdc_lookback_days: "14"
+}, false);
+assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)"));
+"""
+        run_node_script(script, "SQLX template evaluation check")
 
     def test_sqlx_definitions_and_layer_contracts(self):
         definitions_dir = REPO_ROOT / "definitions"
         sqlx_files = sorted(definitions_dir.rglob("*.sqlx"))
         self.assertEqual(
             len(sqlx_files),
-            7,
-            "Expected 2 Bronze, 2 Silver tables, 1 Silver assertion, and 2 Gold SQLX files.",
+            9,
+            "Expected 4 Bronze, 2 Silver tables, 1 Silver assertion, and 2 Gold SQLX files.",
         )
 
         for sqlx_path in sqlx_files:
@@ -536,12 +917,21 @@ for (const offValue of ["false", "FALSE", false]) {
                             f"{rel}: Silver tables without requirePartitionFilter must define assertions.",
                         )
             elif rel.startswith("definitions/03_gold/"):
-                if model_type in ("table", "incremental"):
-                    self.assertRegex(
-                        config_body,
-                        r"\bassertions\s*:\s*\{",
-                        f"{rel}: Gold tables must define assertions.",
-                    )
+                self.assertEqual(
+                    model_type,
+                    "incremental",
+                    f"{rel}: Gold marts must use type 'incremental' for partition-pruned merges.",
+                )
+                self.assertRegex(
+                    config_body,
+                    r"\bassertions\s*:\s*\{",
+                    f"{rel}: Gold marts must define assertions.",
+                )
+                self.assertRegex(
+                    config_body,
+                    r"\bupdatePartitionFilter\s*:",
+                    f"{rel}: Gold marts must define updatePartitionFilter.",
+                )
 
             if rel.startswith("definitions/03_gold/") and '${ref("fct_orders")}' in raw_text:
                 self.assertRegex(
@@ -554,26 +944,53 @@ for (const offValue of ["false", "FALSE", false]) {
             encoding="utf-8"
         )
         self.assertIn("_metadata_deleted", pos_orders_bronze)
+        self.assertIn("_cdc_sequence_num", pos_orders_bronze)
+
+        pos_stream_bronze = (
+            REPO_ROOT / "definitions/01_bronze/pos_orders_stream_cdc.sqlx"
+        ).read_text(encoding="utf-8")
+        self.assertIn("subscription_name", pos_stream_bronze)
+        self.assertIn("publish_time", pos_stream_bronze)
+
+        pos_batch_bronze = (
+            REPO_ROOT / "definitions/01_bronze/pos_orders_batch_cdc.sqlx"
+        ).read_text(encoding="utf-8")
+        self.assertIn("_metadata_deleted", pos_batch_bronze)
+        self.assertIn("_cdc_sequence_num", pos_batch_bronze)
 
         crm_customers_bronze = (
             REPO_ROOT / "definitions/01_bronze/crm_customers_cdc.sqlx"
         ).read_text(encoding="utf-8")
         self.assertIn("_metadata_deleted", crm_customers_bronze)
+        self.assertIn("customer_email", crm_customers_bronze)
 
         fct_orders = (REPO_ROOT / "definitions/02_silver/fct_orders.sqlx").read_text(encoding="utf-8")
         self.assertIn("store_id", fct_orders)
-        self.assertIn("policy_tags.piiColumnConfig", fct_orders)
+        self.assertIn("policy_tags.piiRestrictedPolicyTag", fct_orders)
+        self.assertIn("policy_tags.piiMaskedPolicyTag", fct_orders)
         self.assertIn("cdc_helpers.activeCdcFilter(", fct_orders)
         self.assertIn("cdc_helpers.filterCdcDeletes()", fct_orders)
+        self.assertIn("cdc_helpers.lookbackDays()", fct_orders)
+        self.assertIn("cdc_helpers.deduplicateCdc(", fct_orders)
+        self.assertIn("include_stream_orders", fct_orders)
+        self.assertIn("include_batch_orders", fct_orders)
 
         dim_customers = (REPO_ROOT / "definitions/02_silver/dim_customers.sqlx").read_text(
             encoding="utf-8"
         )
-        self.assertIn("scd_type2.", dim_customers)
+        self.assertIn("scd_type2.scd2PreviousHashSql", dim_customers)
+        self.assertIn("scd_type2.scd2WindowColumnsSql", dim_customers)
         self.assertIn("cdc_helpers.activeCdcFilter(", dim_customers)
         self.assertIn("cdc_helpers.filterCdcDeletes()", dim_customers)
-        self.assertRegex(dim_customers, r"customer_name\s*:\s*policy_tags\.piiColumnConfig\(")
-        self.assertRegex(dim_customers, r"customer_ic_number\s*:\s*policy_tags\.piiColumnConfig\(")
+        self.assertIn("policy_tags.piiRestrictedPolicyTag()", dim_customers)
+        self.assertIn("policy_tags.piiMaskedPolicyTag()", dim_customers)
+        self.assertIn('"customer_ic_number"', dim_customers)
+
+        assert_orders = (
+            REPO_ROOT / "definitions/02_silver/assert_fct_orders_quality.sqlx"
+        ).read_text(encoding="utf-8")
+        self.assertIn("cdc_helpers.lookbackDays()", assert_orders)
+        self.assertNotIn("DATE('1970-01-01')", assert_orders)
 
         for silver_model in ("fct_orders.sqlx", "dim_customers.sqlx"):
             silver_text = (REPO_ROOT / "definitions/02_silver" / silver_model).read_text(
@@ -598,6 +1015,25 @@ for (const offValue of ["false", "FALSE", false]) {
             "dataform.projectConfig.vars.gold_retail_dataset || dataform.projectConfig.vars.gold_dataset",
             retail_mart,
         )
+
+    def test_env_compilation_examples_valid(self):
+        tag_pattern = re.compile(
+            r"^projects/[a-z0-9-]+/locations/[a-z0-9-]+/taxonomies/[0-9]+/policyTags/[0-9]+$"
+        )
+        for env_name in ("dev", "staging", "prod"):
+            env_path = REPO_ROOT / "envs" / f"{env_name}.compilation.json.example"
+            data = json.loads(env_path.read_text(encoding="utf-8"))
+            self.assertIn("defaultDatabase", data)
+            self.assertIn("defaultSchema", data)
+            self.assertIn("defaultLocation", data)
+            self.assertIn("vars", data)
+            env_vars = data["vars"]
+            for var_name in REQUIRED_VARS:
+                self.assertIn(var_name, env_vars, f"{env_path.name}: missing var {var_name}")
+            if env_name in ("staging", "prod"):
+                self.assertEqual(env_vars["allow_untagged_pii"], "false")
+                self.assertRegex(env_vars["pii_restricted_policy_tag"], tag_pattern)
+                self.assertRegex(env_vars["pii_masked_policy_tag"], tag_pattern)
 
     def test_quality_rules_and_governance_files(self):
         quality_text = (REPO_ROOT / "quality/silver_orders_quality.yaml").read_text(encoding="utf-8")
@@ -641,6 +1077,7 @@ for (const offValue of ["false", "FALSE", false]) {
         self.assertIn("filter_cdc_deletes", readme)
         self.assertIn("includes/cdc_helpers.js", readme)
         self.assertIn("dataform-dryrun.yml", readme)
+        self.assertIn("dataform-promote.yml", readme)
         self.assertIn("GCP_WIF_PROVIDER", readme)
         self.assertIn("GCP_WIF_SERVICE_ACCOUNT", readme)
         self.assertIn("DATAFORM_REPO_PATH", readme)
@@ -653,7 +1090,7 @@ for (const offValue of ["false", "FALSE", false]) {
         )
         self.assertNotIn("25 data engineers", split_skill)
 
-    def test_dataform_dryrun_workflow_security_and_contract(self):
+    def test_dataform_workflows_security_and_contract(self):
         workflow_files = sorted((REPO_ROOT / ".github/workflows").glob("*.yml"))
         for wf_path in workflow_files:
             wf_text = wf_path.read_text(encoding="utf-8")
@@ -695,10 +1132,17 @@ for (const offValue of ["false", "FALSE", false]) {
         self.assertRegex(dryrun, r"(?m)^\s*workflow_dispatch:\s*$")
         self.assertRegex(dryrun, r"(?m)^\s*pull_request:\s*$")
         self.assertRegex(dryrun, r"(?m)^permissions:\s*\n\s+contents:\s*read\s*\n\s+id-token:\s*write\b")
+        self.assertIn("python3 -m unittest discover -s tests -v", dryrun)
         self.assertIn(
             "vars.GCP_WIF_PROVIDER != '' && vars.GCP_WIF_SERVICE_ACCOUNT != '' && vars.DATAFORM_REPO_PATH != ''",
             dryrun,
         )
+        self.assertIn("https://dataform.googleapis.com/v1/", dryrun)
+        self.assertNotIn("v1beta1", dryrun)
+        self.assertIn("codeCompilationConfig", dryrun)
+        self.assertIn("PII_MASKED_POLICY_TAG", dryrun)
+        self.assertIn("PII_RESTRICTED_POLICY_TAG", dryrun)
+        self.assertIn('"allow_untagged_pii"] = "false"', dryrun)
         self.assertIn("actions/checkout@11d5960a326750d5838078e36cf38b85af677262", dryrun)
         self.assertIn("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093", dryrun)
         self.assertIn("workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}", dryrun)
@@ -709,6 +1153,22 @@ for (const offValue of ["false", "FALSE", false]) {
         self.assertIn("compilationResults", dryrun)
         self.assertIn("compilationErrors", dryrun)
         self.assertNotRegex(dryrun, r"\bcurl\b")
+
+        promote = (REPO_ROOT / ".github/workflows/dataform-promote.yml").read_text(encoding="utf-8")
+        self.assertRegex(promote, r"(?m)^permissions:\s*\n\s+contents:\s*read\s*\n\s+id-token:\s*write\b")
+        self.assertIn("environment: dev", promote)
+        self.assertIn("environment: staging", promote)
+        self.assertIn("environment: prod", promote)
+        self.assertIn("dev-main", promote)
+        self.assertIn("staging-main", promote)
+        self.assertIn("prod-main", promote)
+        self.assertIn("prod-release", promote)
+        self.assertIn("https://dataform.googleapis.com/v1/", promote)
+        self.assertNotIn("v1beta1", promote)
+        self.assertIn("releaseCompilationResult", promote)
+        self.assertIn('"allow_untagged_pii": "false"', promote)
+        self.assertIn("refs/tags/v", promote)
+        self.assertNotRegex(promote, r"\bcurl\b")
 
     def test_markdown_prose_sentence_length(self):
         actual_md_files = {

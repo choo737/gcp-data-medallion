@@ -1,33 +1,44 @@
 config {
-  type: "table",
+  type: "incremental",
   database: dataform.projectConfig.vars.gold_project,
   schema: dataform.projectConfig.vars.gold_dataset,
-  description: "Daily finance revenue mart aggregated by order date and country.",
+  uniqueKey: ["order_date", "currency_code"],
+  description: "Daily finance revenue mart aggregated by order date and currency.",
   bigquery: {
     partitionBy: "order_date",
-    clusterBy: ["country_code"]
+    clusterBy: ["currency_code"],
+    updatePartitionFilter: "order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)"
   },
   assertions: {
-    nonNull: ["order_date", "country_code", "gross_revenue"]
+    nonNull: ["order_date", "currency_code", "gross_revenue"],
+    uniqueKey: ["order_date", "currency_code"]
   },
   columns: {
     order_date: "Order calendar date.",
-    country_code: "ISO country code.",
-    order_count: "Completed order count for the day and country.",
+    currency_code: "ISO 4217 currency code.",
+    order_count: "Completed order count for the day and currency.",
     gross_revenue: "Total gross order revenue.",
+    discount_total: "Total discounts applied.",
+    tax_total: "Total taxes collected.",
     net_revenue: "Total net revenue after discounts."
   }
 }
 
 SELECT
   order_date,
-  country_code,
+  currency_code,
   COUNT(order_id) AS order_count,
   SUM(gross_amount) AS gross_revenue,
+  SUM(COALESCE(discount_amount, 0)) AS discount_total,
+  SUM(COALESCE(tax_amount, 0)) AS tax_total,
   SUM(net_amount) AS net_revenue
 FROM ${ref("fct_orders")}
-WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 3650 DAY)
-  AND status != 'CANCELLED'
+WHERE ${when(
+  incremental(),
+  "order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)",
+  "order_date >= DATE('1970-01-01')"
+)}
+  AND order_status != 'CANCELLED'
 GROUP BY
   order_date,
-  country_code
+  currency_code

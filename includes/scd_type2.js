@@ -1,4 +1,4 @@
-// Reusable SCD Type 2 window helpers for CDC streams.
+// Reusable SCD Type 2 window and change-detection helpers for CDC streams.
 
 const VALID_IDENTIFIER_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const VALID_RELATION_REGEX =
@@ -53,16 +53,43 @@ function normalizeKeys(naturalKey) {
   throw new Error("naturalKey must be a non-empty string or array.");
 }
 
-function scd2WindowColumnsSql(naturalKey, orderByColumn, openEndSql) {
-  const orderCol = assertIdentifier(orderByColumn, "orderByColumn");
+function normalizeOrderColumns(orderByColumns) {
+  if (Array.isArray(orderByColumns)) {
+    if (orderByColumns.length === 0) {
+      throw new Error("orderByColumn must contain at least one column.");
+    }
+    return orderByColumns.map((col) => assertIdentifier(col, "orderByColumn"));
+  }
+  if (typeof orderByColumns === "string" && orderByColumns.trim().length > 0) {
+    return [assertIdentifier(orderByColumns, "orderByColumn")];
+  }
+  throw new Error("orderByColumn must be a non-empty string or array.");
+}
+
+function scd2PreviousHashSql(
+  naturalKey,
+  orderByColumns,
+  hashColumn = "record_hash"
+) {
+  const keys = normalizeKeys(naturalKey).join(", ");
+  const orderCols = normalizeOrderColumns(orderByColumns);
+  const safeHashCol = assertIdentifier(hashColumn, "hashColumn");
+  const orderByClause = orderCols.map((col) => `${col} ASC`).join(", ");
+  return `LAG(${safeHashCol}) OVER (PARTITION BY ${keys} ORDER BY ${orderByClause})`;
+}
+
+function scd2WindowColumnsSql(naturalKey, orderByColumns, openEndSql) {
+  const orderCols = normalizeOrderColumns(orderByColumns);
+  const primaryOrderCol = orderCols[0];
+  const orderByClause = orderCols.map((col) => `${col} ASC`).join(", ");
   const keys = normalizeKeys(naturalKey).join(", ");
   const safeOpenEnd = normalizeOpenEndSql(openEndSql);
-  const nextExpr = `LEAD(${orderCol}) OVER (PARTITION BY ${keys} ORDER BY ${orderCol} ASC)`;
+  const nextExpr = `LEAD(${primaryOrderCol}) OVER (PARTITION BY ${keys} ORDER BY ${orderByClause})`;
   const validToExpr = safeOpenEnd
     ? `COALESCE(${nextExpr}, ${safeOpenEnd})`
     : nextExpr;
   return [
-    `${orderCol} AS valid_from`,
+    `${primaryOrderCol} AS valid_from`,
     `${validToExpr} AS valid_to`,
     `CASE WHEN ${nextExpr} IS NULL THEN TRUE ELSE FALSE END AS is_current`
   ].join(",\n  ");
@@ -78,17 +105,31 @@ function buildScd2Query(options) {
     excludeDeletedColumn = ""
   } = options || {};
 
-  if (typeof sourceSql !== "string" || !VALID_RELATION_REGEX.test(sourceSql.trim())) {
-    throw new Error("buildScd2Query requires a valid CTE or backtick-quoted relation in sourceSql.");
+  if (
+    typeof sourceSql !== "string" ||
+    !VALID_RELATION_REGEX.test(sourceSql.trim())
+  ) {
+    throw new Error(
+      "buildScd2Query requires a valid CTE or backtick-quoted relation in sourceSql."
+    );
   }
   if (!Array.isArray(columns) || columns.length === 0) {
-    throw new Error("buildScd2Query requires an explicit non-empty columns list.");
+    throw new Error(
+      "buildScd2Query requires an explicit non-empty columns list."
+    );
   }
   const safeSource = sourceSql.trim();
   const projected = columns.map((col) => assertIdentifier(col, "column"));
   let filterClause = "";
-  if (excludeDeletedColumn !== undefined && excludeDeletedColumn !== null && excludeDeletedColumn !== "") {
-    const delCol = assertIdentifier(excludeDeletedColumn, "excludeDeletedColumn");
+  if (
+    excludeDeletedColumn !== undefined &&
+    excludeDeletedColumn !== null &&
+    excludeDeletedColumn !== ""
+  ) {
+    const delCol = assertIdentifier(
+      excludeDeletedColumn,
+      "excludeDeletedColumn"
+    );
     filterClause = `\nWHERE COALESCE(${delCol}, FALSE) = FALSE`;
   }
 
@@ -102,6 +143,8 @@ function buildScd2Query(options) {
 
 module.exports = {
   normalizeKeys,
+  normalizeOrderColumns,
+  scd2PreviousHashSql,
   scd2WindowColumnsSql,
   buildScd2Query
 };
