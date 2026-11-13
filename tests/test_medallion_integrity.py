@@ -40,6 +40,7 @@ REQUIRED_FILES = (
     "AGENTS.md",
     "CLAUDE.md",
     "GEMINI.md",
+    "QUESTIONNAIRE.md",
     ".github/workflows/ci.yml",
     ".github/workflows/dataform-dryrun.yml",
     ".github/workflows/dataform-promote.yml",
@@ -52,6 +53,7 @@ REQUIRED_FILES = (
     "includes/cdc_helpers.js",
     "quality/silver_orders_quality.yaml",
     ".agents/skills/add-medallion-model/SKILL.md",
+    ".agents/skills/setup-data-medallion/SKILL.md",
     ".agents/skills/split-domain-mesh/SKILL.md",
     "definitions/01_bronze/pos_orders_cdc.sqlx",
     "definitions/01_bronze/pos_orders_stream_cdc.sqlx",
@@ -69,7 +71,9 @@ MARKDOWN_DOC_FILES = (
     "AGENTS.md",
     "CLAUDE.md",
     "GEMINI.md",
+    "QUESTIONNAIRE.md",
     ".agents/skills/add-medallion-model/SKILL.md",
+    ".agents/skills/setup-data-medallion/SKILL.md",
     ".agents/skills/split-domain-mesh/SKILL.md",
 )
 
@@ -1089,6 +1093,136 @@ assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTE
             encoding="utf-8"
         )
         self.assertNotIn("25 data engineers", split_skill)
+
+    def test_onboarding_docs_skills_and_gitignore(self):
+        gitignore_lines = {
+            line.strip()
+            for line in (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        }
+        for ignored_entry in (
+            "platform-context.json",
+            "envs/*.compilation.json",
+            ".cm_project",
+            ".codemender/",
+        ):
+            self.assertIn(ignored_entry, gitignore_lines)
+
+        git_bin = shutil.which("git")
+        if git_bin is not None:
+            for should_ignore in (
+                "platform-context.json",
+                "envs/dev.compilation.json",
+                "envs/staging.compilation.json",
+                "envs/prod.compilation.json",
+            ):
+                proc = subprocess.run(
+                    [git_bin, "check-ignore", "-q", should_ignore],
+                    cwd=REPO_ROOT,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 0, f"{should_ignore} must be gitignored.")
+
+            for must_stay_tracked in (
+                "envs/dev.compilation.json.example",
+                "envs/staging.compilation.json.example",
+                "envs/prod.compilation.json.example",
+            ):
+                proc = subprocess.run(
+                    [git_bin, "check-ignore", "-q", must_stay_tracked],
+                    cwd=REPO_ROOT,
+                    check=False,
+                )
+                self.assertNotEqual(
+                    proc.returncode,
+                    0,
+                    f"{must_stay_tracked} must not be gitignored.",
+                )
+
+        questionnaire = (REPO_ROOT / "QUESTIONNAIRE.md").read_text(encoding="utf-8")
+        for expected in (
+            "https://github.com/choo737/gcp-launchpad",
+            "platform-context.json",
+            "Greenfield Suite",
+            "Brownfield Standalone BigQuery",
+            "definitions/01_bronze/*.sqlx",
+            "workflow_settings.yaml",
+            "envs/{dev,staging,prod}.compilation.json",
+            "quality/silver_orders_quality.yaml",
+            "filter_cdc_deletes",
+            "include_stream_orders",
+            "include_batch_orders",
+            "sandbox_poc",
+            "enterprise_standard",
+            "regulated_fsi_rmit",
+            "allow_untagged_pii",
+            "pii_restricted_policy_tag",
+            "pii_masked_policy_tag",
+            "pii_policy_tag",
+            "cdc_lookback_days",
+            "gold_project",
+            "gold_retail_project",
+            ".agents/skills/split-domain-mesh/SKILL.md",
+            "GCP_WIF_PROVIDER",
+            "GCP_WIF_SERVICE_ACCOUNT",
+            "DATAFORM_REPO_PATH",
+            "dataform-dryrun.yml",
+            "dataform-promote.yml",
+        ):
+            self.assertIn(expected, questionnaire)
+
+        setup_skill = (
+            REPO_ROOT / ".agents/skills/setup-data-medallion/SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertRegex(setup_skill, r"(?ms)^---\nname:\s*setup-data-medallion\n.*?^---")
+        for expected in (
+            "choo737/gcp-launchpad",
+            "platform-context.json",
+            "QUESTIONNAIRE.md",
+            "workflow_settings.yaml",
+            "3.1.5",
+            "package.json",
+            "envs/{dev,staging,prod}.compilation.json",
+            "envs/dev.compilation.json.example",
+            "include_stream_orders",
+            "include_batch_orders",
+            "allow_untagged_pii",
+            "cdc_lookback_days",
+            "GCP_WIF_PROVIDER",
+            "GCP_WIF_SERVICE_ACCOUNT",
+            "DATAFORM_REPO_PATH",
+            "gh repo create",
+            "--private",
+            "make test",
+        ):
+            self.assertIn(expected, setup_skill)
+
+        for doc_name in ("README.md", "AGENTS.md", "CLAUDE.md", "GEMINI.md"):
+            doc_text = (REPO_ROOT / doc_name).read_text(encoding="utf-8")
+            self.assertIn("QUESTIONNAIRE.md", doc_text, f"{doc_name} must reference QUESTIONNAIRE.md.")
+            self.assertIn(
+                ".agents/skills/setup-data-medallion/SKILL.md",
+                doc_text,
+                f"{doc_name} must register setup-data-medallion.",
+            )
+            self.assertIn(
+                "https://github.com/choo737/gcp-launchpad",
+                doc_text,
+                f"{doc_name} must reference gcp-launchpad.",
+            )
+            self.assertIn(
+                "platform-context.json",
+                doc_text,
+                f"{doc_name} must document platform-context.json.",
+            )
+
+        agents_text = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn(".agents/skills/add-medallion-model/SKILL.md", agents_text)
+        self.assertIn(".agents/skills/split-domain-mesh/SKILL.md", agents_text)
+
+        claude_body = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8").split("\n", 1)[1]
+        gemini_body = (REPO_ROOT / "GEMINI.md").read_text(encoding="utf-8").split("\n", 1)[1]
+        self.assertEqual(claude_body, gemini_body, "CLAUDE.md and GEMINI.md must stay aligned.")
 
     def test_dataform_workflows_security_and_contract(self):
         workflow_files = sorted((REPO_ROOT / ".github/workflows").glob("*.yml"))

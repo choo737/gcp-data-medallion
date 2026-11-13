@@ -17,6 +17,13 @@ This file defines repository rules for OpenAI Codex, Antigravity, Cursor, and Am
 - Use `policy_tags.piiRestrictedPolicyTag(vars)` and `policy_tags.piiMaskedPolicyTag(vars)` for BigQuery Policy Tag attachment.
 - Use `scd_type2.scd2PreviousHashSql(...)`, `scd_type2.scd2WindowColumnsSql(...)`, or `scd_type2.buildScd2Query(...)` for CDC history windows.
 
+## Onboarding and Skills
+
+- **Skills**: Register and follow `.agents/skills/setup-data-medallion/SKILL.md`, `.agents/skills/add-medallion-model/SKILL.md`, and `.agents/skills/split-domain-mesh/SKILL.md`.
+- **Questionnaire**: Walk customers through `QUESTIONNAIRE.md` before editing `workflow_settings.yaml` or gitignored `envs/{dev,staging,prod}.compilation.json`.
+- **Standalone Brownfield**: Support existing BigQuery Bronze datasets directly by adapting `definitions/01_bronze/*.sqlx` declarations.
+- **Launchpad Handoff**: Read optional gitignored `platform-context.json` from `https://github.com/choo737/gcp-launchpad` to prefill project and Policy Tag settings.
+
 ## Security and Prose Rules
 
 - Never hardcode real GCP project IDs, org IDs, folder IDs, billing IDs, or developer LDAPs.

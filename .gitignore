@@ -4,6 +4,10 @@ node_modules/
 .DS_Store
 __pycache__/
 
+# Customer context and local compilation overrides
+platform-context.json
+envs/*.compilation.json
+
 # CodeMender metadata
 .cm_project
 .codemender/

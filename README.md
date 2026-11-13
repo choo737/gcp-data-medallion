@@ -24,6 +24,20 @@ Click **Use this template** on GitHub or run this command:
 gh repo create acme-corp/gcp-data-medallion --private --template choo737/gcp-data-medallion --clone
 ```
 
+## Onboarding and Standalone Brownfield Adoption
+
+Use [QUESTIONNAIRE.md](QUESTIONNAIRE.md) and `.agents/skills/setup-data-medallion/SKILL.md` to configure Greenfield or standalone Brownfield deployments.
+
+- **Greenfield Suite**: Pair with `gcp-foundation` and `gcp-data-ingestion`, or read gitignored `platform-context.json` from [choo737/gcp-launchpad](https://github.com/choo737/gcp-launchpad).
+- **Brownfield Standalone**: Point `bronze_project` and `bronze_dataset` at existing BigQuery raw tables and adapt `definitions/01_bronze/*.sqlx`.
+- **Environment Overrides**: Copy `envs/*.compilation.json.example` to gitignored `envs/{dev,staging,prod}.compilation.json` instead of committing customer IDs.
+
+| Skill | File | Purpose |
+| :--- | :--- | :--- |
+| `setup-data-medallion` | `.agents/skills/setup-data-medallion/SKILL.md` | Interactive onboarding via `QUESTIONNAIRE.md` and optional `platform-context.json` |
+| `add-medallion-model` | `.agents/skills/add-medallion-model/SKILL.md` | Add a new Bronze declaration, Silver table, and Gold mart |
+| `split-domain-mesh` | `.agents/skills/split-domain-mesh/SKILL.md` | Split a Gold domain folder into a separate repository |
+
 ## How This Pairs With gcp-foundation
 
 Terraform in `gcp-foundation` provisions the underlying Google Cloud platform infrastructure.
