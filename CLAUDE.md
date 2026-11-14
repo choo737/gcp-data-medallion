@@ -12,4 +12,5 @@ Read [AGENTS.md](AGENTS.md) before modifying any file in this repository.
 - Onboard via `QUESTIONNAIRE.md` and `.agents/skills/setup-data-medallion/SKILL.md` for standalone Brownfield tables or `platform-context.json` from `https://github.com/choo737/gcp-launchpad`.
 - Keep `workflow_settings.yaml` at `/` with all contract `vars` and never create `package.json`.
 - Store customer project overrides only in gitignored `envs/{dev,staging,prod}.compilation.json` or `platform-context.json`.
+- Consult [docs/01-architecture-and-sqlx-reference.md](docs/01-architecture-and-sqlx-reference.md) and [docs/02-enterprise-operationalization-guide.md](docs/02-enterprise-operationalization-guide.md) for SQLX contracts and rollout steps.
 - Run `make test` and confirm all checks pass before finishing.

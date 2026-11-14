@@ -40,6 +40,8 @@ REQUIRED_FILES = (
     "AGENTS.md",
     "CLAUDE.md",
     "QUESTIONNAIRE.md",
+    "docs/01-architecture-and-sqlx-reference.md",
+    "docs/02-enterprise-operationalization-guide.md",
     ".github/workflows/ci.yml",
     ".github/workflows/dataform-dryrun.yml",
     ".github/workflows/dataform-promote.yml",
@@ -70,9 +72,24 @@ MARKDOWN_DOC_FILES = (
     "AGENTS.md",
     "CLAUDE.md",
     "QUESTIONNAIRE.md",
+    "docs/01-architecture-and-sqlx-reference.md",
+    "docs/02-enterprise-operationalization-guide.md",
     ".agents/skills/add-medallion-model/SKILL.md",
     ".agents/skills/setup-data-medallion/SKILL.md",
     ".agents/skills/split-domain-mesh/SKILL.md",
+)
+
+CANONICAL_README_H2_SECTIONS = (
+    "## Template Suite Overview",
+    "## Create Your Private Repository (Do Not Fork Publicly)",
+    "## Architecture & Capabilities",
+    "## 6-Step Enterprise Operationalization",
+    "## AI Coding Agent Quickstart",
+    "## CI/CD Workflows",
+    "## Repository Layout",
+    "## Quick Verification",
+    "## Documentation Index",
+    "## License",
 )
 
 # SHA-256 digests of forbidden internal identifiers so plaintext secrets stay out of the repo.
@@ -1052,8 +1069,16 @@ assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTE
             self.assertIn(expected, quality_text)
 
         codeowners = (REPO_ROOT / "CODEOWNERS").read_text(encoding="utf-8")
-        self.assertIn("/definitions/03_gold/finance/", codeowners)
-        self.assertIn("/definitions/03_gold/retail/", codeowners)
+        for expected_owner_path in (
+            "* @choo737",
+            "/definitions/01_bronze/",
+            "/definitions/02_silver/",
+            "/definitions/03_gold/finance/",
+            "/definitions/03_gold/retail/",
+            "/quality/",
+            "/.github/workflows/",
+        ):
+            self.assertIn(expected_owner_path, codeowners)
 
         ci_text = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertRegex(ci_text, r"(?m)^permissions:\s*\n\s+contents:\s*read\b")
@@ -1065,27 +1090,84 @@ assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTE
         self.assertIn("allow_untagged_pii", ci_text)
 
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("https://github.com/choo737/gcp-foundation", readme)
-        self.assertIn("https://github.com/choo737/gcp-data-ingestion", readme)
-        self.assertIn("https://github.com/choo737/gcp-data-medallion", readme)
-        self.assertIn("3-Repository Accelerator Suite", readme)
-        self.assertIn("workflow_settings.yaml", readme)
-        self.assertIn("3.1.5", readme)
-        self.assertIn("> [!NOTE]", readme)
-        self.assertIn("google_bigquery_reservation", readme)
-        self.assertIn("modules/data/bigquery-reservations/", readme)
-        self.assertIn("Who Creates Bronze Tables", readme)
-        self.assertIn("Why Dataform Over dbt", readme)
-        self.assertIn("filter_cdc_deletes", readme)
-        self.assertIn("includes/cdc_helpers.js", readme)
-        self.assertIn("dataform-dryrun.yml", readme)
-        self.assertIn("dataform-promote.yml", readme)
-        self.assertIn("GCP_WIF_PROVIDER", readme)
-        self.assertIn("GCP_WIF_SERVICE_ACCOUNT", readme)
-        self.assertIn("DATAFORM_REPO_PATH", readme)
+        self.assertTrue(
+            readme.startswith("# GCP Data Medallion\n"),
+            "README.md must start with '# GCP Data Medallion'.",
+        )
+        readme_h2_sections = [
+            line.strip() for line in readme.splitlines() if line.startswith("## ")
+        ]
+        self.assertEqual(
+            readme_h2_sections,
+            list(CANONICAL_README_H2_SECTIONS),
+            "README.md must follow the exact 10-section canonical H2 outline.",
+        )
+        for expected_readme_item in (
+            "https://github.com/choo737/gcp-launchpad",
+            "https://github.com/choo737/gcp-foundation",
+            "https://github.com/choo737/gcp-data-ingestion",
+            "https://github.com/choo737/gcp-data-medallion",
+            "docs/01-architecture-and-sqlx-reference.md",
+            "docs/02-enterprise-operationalization-guide.md",
+            "workflow_settings.yaml",
+            "3.1.5",
+            "dataform-dryrun.yml",
+            "dataform-promote.yml",
+            "GCP_WIF_PROVIDER",
+            "GCP_WIF_SERVICE_ACCOUNT",
+            "DATAFORM_REPO_PATH",
+            "PII_MASKED_POLICY_TAG",
+            "PII_RESTRICTED_POLICY_TAG",
+            "setup-data-medallion",
+            "add-medallion-model",
+            "split-domain-mesh",
+        ):
+            self.assertIn(expected_readme_item, readme)
         self.assertNotIn("25 data engineers", readme)
+
+        arch_doc = (REPO_ROOT / "docs/01-architecture-and-sqlx-reference.md").read_text(
+            encoding="utf-8"
+        )
+        for expected_arch_item in (
+            "workflow_settings.yaml",
+            "3.1.5",
+            "> [!NOTE]",
+            "google_bigquery_reservation",
+            "modules/data/bigquery-reservations/",
+            "Who Creates Bronze Tables",
+            "Why Dataform Over dbt",
+            "filter_cdc_deletes",
+            "includes/cdc_helpers.js",
+            "includes/policy_tags.js",
+            "piiRestrictedPolicyTag",
+            "piiMaskedPolicyTag",
+            "scd_type2.scd2PreviousHashSql",
+        ):
+            self.assertIn(expected_arch_item, arch_doc)
+        self.assertNotIn("25 data engineers", arch_doc)
         for var_name in REQUIRED_VARS:
-            self.assertIn(var_name, readme)
+            self.assertIn(var_name, arch_doc)
+
+        ops_doc = (
+            REPO_ROOT / "docs/02-enterprise-operationalization-guide.md"
+        ).read_text(encoding="utf-8")
+        for expected_ops_item in (
+            "flowchart LR",
+            "gh repo create",
+            "CODEOWNERS",
+            "QUESTIONNAIRE.md",
+            "platform-context.json",
+            "https://github.com/choo737/gcp-launchpad",
+            "envs/{dev,staging,prod}.compilation.json",
+            "dataform-dryrun.yml",
+            "dataform-promote.yml",
+            "git tag -a v1.0.0",
+            "cdc_lookback_days",
+            ".agents/skills/split-domain-mesh/SKILL.md",
+            "01-architecture-and-sqlx-reference.md",
+        ):
+            self.assertIn(expected_ops_item, ops_doc)
+        self.assertNotIn("25 data engineers", ops_doc)
 
         split_skill = (REPO_ROOT / ".agents/skills/split-domain-mesh/SKILL.md").read_text(
             encoding="utf-8"
@@ -1217,6 +1299,11 @@ assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTE
         agents_text = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn(".agents/skills/add-medallion-model/SKILL.md", agents_text)
         self.assertIn(".agents/skills/split-domain-mesh/SKILL.md", agents_text)
+        self.assertIn("docs/01-architecture-and-sqlx-reference.md", agents_text)
+        self.assertIn("docs/02-enterprise-operationalization-guide.md", agents_text)
+        claude_text = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertIn("docs/01-architecture-and-sqlx-reference.md", claude_text)
+        self.assertIn("docs/02-enterprise-operationalization-guide.md", claude_text)
         self.assertFalse((REPO_ROOT / "GEMINI.md").exists(), "GEMINI.md must not exist.")
 
     def test_dataform_workflows_security_and_contract(self):

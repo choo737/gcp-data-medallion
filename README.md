@@ -1,22 +1,25 @@
-# gcp-data-medallion
+# GCP Data Medallion
 
-This repository holds BigQuery Dataform SQLX models for a Bronze, Silver, and Gold medallion warehouse.
+BigQuery Dataform `3.1.5` SQLX models for Bronze, Silver, and Gold medallion warehouses across `dev`, `staging`, and `prod`.
 
-It pairs with [gcp-foundation](https://github.com/choo737/gcp-foundation) and [gcp-data-ingestion](https://github.com/choo737/gcp-data-ingestion) in one three-repository stack.
+This repository belongs to the [gcp-launchpad](https://github.com/choo737/gcp-launchpad) Google Cloud template suite.
 
-## 3-Repository Accelerator Suite
+## Template Suite Overview
 
-Three linked repositories separate cloud infrastructure, ingestion pipelines, and SQLX transformations.
+Start in [gcp-launchpad](https://github.com/choo737/gcp-launchpad) for multi-repo routing, or use this repository standalone against existing BigQuery Bronze tables.
 
-| Repository | Layer | Scope |
-| :--- | :--- | :--- |
-| [choo737/gcp-foundation](https://github.com/choo737/gcp-foundation) | Platform | Terraform landing zone, BigQuery datasets, Policy Tags, and Dataform repositories |
-| [choo737/gcp-data-ingestion](https://github.com/choo737/gcp-data-ingestion) | Ingestion | Batch GCS, streaming Pub/Sub, and Datastream CDC into Bronze |
-| [choo737/gcp-data-medallion](https://github.com/choo737/gcp-data-medallion) | Medallion | BigQuery Dataform Bronze, Silver, and Gold SQLX models |
+| Repository | Role | Scope | Status |
+| :--- | :--- | :--- | :--- |
+| [gcp-launchpad](https://github.com/choo737/gcp-launchpad) | Entry Hub & Router | Suite Overview, Architecture Router, and Brownfield Bridge (`platform-context.json`) | Active |
+| [gcp-foundation](https://github.com/choo737/gcp-foundation) | Platform & Governance | Org guardrails, projects, KMS, datasets, Policy Tags, and Dataform repositories | Active |
+| [gcp-data-ingestion](https://github.com/choo737/gcp-data-ingestion) | Bronze Ingestion | Datastream CDC, Pub/Sub streaming, Cloud Run batch ELT, and Cloud Workflows | Active |
+| **[gcp-data-medallion](https://github.com/choo737/gcp-data-medallion)** *(this repo)* | Warehouse & Quality | Dataform `3.1.5` SQLX Medallion (`01_bronze` -> `02_silver` -> `03_gold`) and Dataplex DQ | Active |
+| `gcp-webapp` | Application Layer | HA Cloud Run web portal with External HTTPS Load Balancer and Cloud SQL | Planned |
+| `gcp-adk-agent` | AI Agent Layer | Production Google ADK agent on Vertex AI Agent Engine or Cloud Run | Planned |
 
-## Create Your Private Repository
+## Create Your Private Repository (Do Not Fork Publicly)
 
-GitHub forces normal forks of public repos to stay public.
+GitHub forces normal forks of public repositories to stay public.
 
 Click **Use this template** on GitHub or run this command:
 
@@ -24,13 +27,54 @@ Click **Use this template** on GitHub or run this command:
 gh repo create acme-corp/gcp-data-medallion --private --template choo737/gcp-data-medallion --clone
 ```
 
-## Onboarding and Standalone Brownfield Adoption
+## Architecture & Capabilities
 
-Use [QUESTIONNAIRE.md](QUESTIONNAIRE.md) and `.agents/skills/setup-data-medallion/SKILL.md` to configure Greenfield or standalone Brownfield deployments.
+Dataform `3.1.5` compiles `workflow_settings.yaml` without `package.json` to link `01_bronze` declarations, `02_silver` models, and `03_gold` marts.
 
-- **Greenfield Suite**: Pair with `gcp-foundation` and `gcp-data-ingestion`, or read gitignored `platform-context.json` from [choo737/gcp-launchpad](https://github.com/choo737/gcp-launchpad).
-- **Brownfield Standalone**: Point `bronze_project` and `bronze_dataset` at existing BigQuery raw tables and adapt `definitions/01_bronze/*.sqlx`.
-- **Environment Overrides**: Copy `envs/*.compilation.json.example` to gitignored `envs/{dev,staging,prod}.compilation.json` instead of committing customer IDs.
+```mermaid
+flowchart LR
+  B["01_bronze Declarations<br/>pos_orders_cdc, stream, batch, crm_customers"] --> S["02_silver Conformed<br/>fct_orders + dim_customers SCD2<br/>Dual PII Tags + Assertions"]
+  S --> G["03_gold Domain Marts<br/>finance/mart_daily_revenue<br/>retail/mart_store_performance"]
+  G --> DQ["Dataplex Auto DQ<br/>quality/silver_orders_quality.yaml"]
+```
+
+- **Dataform `3.1.5` Native Execution**: Uses `workflow_settings.yaml` at `/` with no `package.json` and zero separate dbt runtime cost.
+- **Dual PII Policy Tags**: Enforces `pii_restricted_policy_tag` and `pii_masked_policy_tag` via `includes/policy_tags.js` (`allow_untagged_pii: "false"` in `staging`/`prod`).
+- **Aligned CDC Lookback**: Keeps `updatePartitionFilter` and incremental `WHERE` equal via `cdc_lookback_days` (`1..3650`) to prevent duplicate keys.
+- **SCD Type 2 Heartbeat Deduplication**: Strips consecutive unchanged snapshots with `scd_type2.scd2PreviousHashSql` before computing `valid_from`, `valid_to`, and `is_current`.
+
+Read [docs/01-architecture-and-sqlx-reference.md](docs/01-architecture-and-sqlx-reference.md) for all 16 contract variables, helper internals, and Bronze ownership rules.
+
+## 6-Step Enterprise Operationalization
+
+Follow [docs/02-enterprise-operationalization-guide.md](docs/02-enterprise-operationalization-guide.md) and complete [QUESTIONNAIRE.md](QUESTIONNAIRE.md) before running Dataform compilation.
+
+1. **Day 0 Private Repo & Environments**: Create a private repo, configure domain `CODEOWNERS`, protect `main`, and set WIF environments.
+2. **Day 1 Connect Bronze Sources**: Load `platform-context.json` or adapt `definitions/01_bronze/*.sqlx`. Then fill gitignored `envs/{dev,staging,prod}.compilation.json`.
+3. **Day 1 PR Dry-Run & Tag Release**: PRs run `dataform-dryrun.yml`. Merges update `dev-main`/`staging-main`, and `git tag -a v1.0.0` promotes `prod-main`.
+4. **Day 2 Onboard Models & DQ**: Add Bronze declarations, Silver models, assertions, Gold marts, and `quality/` rules per PR.
+5. **Day 2 Backfills & Triage**: Widen `cdc_lookback_days` instead of `--full-refresh` in `prod`. Halt BI when DQ checks fail.
+6. **Day 2 Scale to Data Mesh**: Keep one repo with `CODEOWNERS`, or split domains via `.agents/skills/split-domain-mesh/SKILL.md`.
+
+## AI Coding Agent Quickstart
+
+Copy the prompt for your coding agent after creating your private repository.
+
+### Antigravity or OpenAI Codex
+
+```text
+Read AGENTS.md, QUESTIONNAIRE.md, and .agents/skills/setup-data-medallion/SKILL.md.
+Check for gitignored platform-context.json from choo737/gcp-launchpad, walk me through QUESTIONNAIRE.md,
+populate gitignored envs/{dev,staging,prod}.compilation.json, and run make test.
+```
+
+### Claude Code
+
+```text
+Read CLAUDE.md, AGENTS.md, and QUESTIONNAIRE.md.
+Follow .agents/skills/setup-data-medallion/SKILL.md to configure Greenfield or Brownfield Bronze declarations,
+set up envs/{dev,staging,prod}.compilation.json without creating package.json, and verify make test passes.
+```
 
 | Skill | File | Purpose |
 | :--- | :--- | :--- |
@@ -38,163 +82,52 @@ Use [QUESTIONNAIRE.md](QUESTIONNAIRE.md) and `.agents/skills/setup-data-medallio
 | `add-medallion-model` | `.agents/skills/add-medallion-model/SKILL.md` | Add a new Bronze declaration, Silver table, and Gold mart |
 | `split-domain-mesh` | `.agents/skills/split-domain-mesh/SKILL.md` | Split a Gold domain folder into a separate repository |
 
-## How This Pairs With gcp-foundation
+## CI/CD Workflows
 
-Terraform in `gcp-foundation` provisions the underlying Google Cloud platform infrastructure.
+Three GitHub Actions workflows enforce SQLX hygiene, keyless Dataform compilation, and tag-gated production promotion over OIDC WIF.
 
-- It creates the Bronze, Silver, and Gold GCP projects and BigQuery datasets.
-- It creates dual-tier BigQuery Policy Tags (`restricted` and `masked`) for PII governance.
-- It provisions raw `google_bigquery_reservation` and `google_bigquery_reservation_assignment` resources in `modules/data/bigquery-reservations/`.
-- It provisions these resources directly instead of Cloud Foundation Fabric, which lacks a reservation module.
-- It creates a `google_dataform_repository` resource synced directly to this repository.
-- It passes target projects, datasets, and Policy Tag IDs into Dataform release configs.
+- `.github/workflows/ci.yml`: Runs `workflow_settings.yaml` validation, Node.js helper checks, and `tests/test_medallion_integrity.py` on every push and PR.
+- `.github/workflows/dataform-dryrun.yml`: Runs hermetic tests and calls Dataform GA `v1` `compilationResults` on PRs when WIF variables exist.
+- `.github/workflows/dataform-promote.yml`: Updates `dev-main` and `staging-main` on `main` pushes, and promotes `prod-main` on `v*` tags.
 
-## Why Dataform Over dbt
-
-Dataform runs natively inside BigQuery Studio with no separate runtime or license cost.
-
-It integrates directly with BigQuery release configs, workflow configs, and Policy Tags.
-
-## Root Configuration Layout
-
-BigQuery Dataform v3 requires `workflow_settings.yaml` at the repository root (`/`).
-
-Dataform reads this file first to set `dataformCoreVersion` (`3.1.5`), default dataset targets, and compilation `vars`.
-
-This repo omits `package.json` because Dataform v3 rejects setting `dataformCoreVersion` when `package.json` exists.
-
-## Compilation Variables Contract
-
-Contract variables in `workflow_settings.yaml` connect Terraform outputs and ingestion paths to SQLX definitions.
-
-| Variable | Default Value | Purpose |
+| GitHub Variable | Example Value | Purpose |
 | :--- | :--- | :--- |
-| `bronze_project` | `your-bronze-project-id` | GCP project holding raw Bronze tables |
-| `bronze_dataset` | `bronze` | BigQuery dataset for Bronze declarations |
-| `silver_project` | `example-silver-project` | GCP project holding conformed Silver tables |
-| `silver_dataset` | `silver` | BigQuery dataset for Silver models |
-| `gold_project` | `example-gold-project` | GCP project holding Gold business marts |
-| `gold_dataset` | `gold` | BigQuery dataset for Gold marts |
-| `gold_retail_project` | `""` | Optional isolated GCP project for Retail Gold marts |
-| `gold_retail_dataset` | `""` | Optional isolated BigQuery dataset for Retail Gold marts |
-| `pii_policy_tag` | `""` | Backwards-compatible fallback BigQuery Policy Tag resource name |
-| `pii_restricted_policy_tag` | `""` | Restricted PII Policy Tag for national ID columns |
-| `pii_masked_policy_tag` | `""` | Masked PII Policy Tag for email and name columns |
-| `allow_untagged_pii` | `"true"` | Set to `"false"` in staging, prod, and strict CI dry runs |
-| `filter_cdc_deletes` | `"true"` | Optional CDC tombstone filter toggle (`"false"` skips `_metadata_deleted`) |
-| `cdc_lookback_days` | `"30"` | Rolling partition lookback window in days (`1..3650`) |
-| `include_stream_orders` | `"false"` | Set to `"true"` to union `pos_orders_stream_cdc` into `fct_orders` |
-| `include_batch_orders` | `"false"` | Set to `"true"` to union `pos_orders_batch_cdc` into `fct_orders` |
+| `GCP_WIF_PROVIDER` | `projects/<num>/locations/global/workloadIdentityPools/gh/providers/repo` | Workload Identity Pool provider resource path |
+| `GCP_WIF_SERVICE_ACCOUNT` | `dataform-ci@example-silver-project.iam.gserviceaccount.com` | Service account granted Dataform viewer or runner roles |
+| `DATAFORM_REPO_PATH` | `projects/example-silver-project/locations/asia-southeast1/repositories/medallion` | Target BigQuery Dataform repository resource name |
+| `PII_MASKED_POLICY_TAG` | `projects/<gov>/locations/<loc>/taxonomies/111/policyTags/222` | Masked PII Policy Tag forcing `allow_untagged_pii: "false"` |
+| `PII_RESTRICTED_POLICY_TAG` | `projects/<gov>/locations/<loc>/taxonomies/111/policyTags/333` | Restricted PII Policy Tag for national ID columns |
 
-## Dual PII Policy Tags
+## Repository Layout
 
-`includes/policy_tags.js` exports `piiRestrictedPolicyTag`, `piiMaskedPolicyTag`, and backwards-compatible `piiPolicyTag`.
+- `workflow_settings.yaml`: Dataform `3.1.5` root configuration and 16 compilation `vars` (no `package.json`).
+- `definitions/01_bronze/`: Raw CDC, stream, and batch source `declaration` files (no DDL).
+- `definitions/02_silver/`: Conformed `fct_orders`, `dim_customers` SCD2, dual Policy Tags, and standalone partition-pruned assertions.
+- `definitions/03_gold/`: Incremental domain marts under `finance/` and `retail/` with lookback pruning.
+- `includes/`: Reusable JavaScript helpers (`audit_columns.js`, `cdc_helpers.js`, `policy_tags.js`, `scd_type2.js`).
+- `quality/`: Dataplex Auto Data Quality rule specifications (`silver_orders_quality.yaml`).
+- `envs/`: Example per-environment compilation overrides (`{dev,staging,prod}.compilation.json.example`).
+- `QUESTIONNAIRE.md`: Interactive onboarding intake for Greenfield and standalone Brownfield adoption.
+- `CODEOWNERS`: Path-scoped GitHub reviewers for Bronze, Silver, Gold domains, quality rules, and workflows.
+- `docs/`: Deep architecture SQLX reference and 6-step enterprise operationalization guide.
+- `tests/`: Hermetic Python and Node.js integrity test suite (`test_medallion_integrity.py`).
 
-Both tier helpers validate full GCP Policy Tag resource paths when non-empty.
+## Quick Verification
 
-Empty tags fail Dataform compilation whenever `allow_untagged_pii` is `"false"`.
-
-- `customer_ic_number` uses `piiRestrictedPolicyTag` in `fct_orders` and `dim_customers`.
-- `customer_email` and `customer_name` use `piiMaskedPolicyTag`.
-
-## Unified Orders and Late-CDC Protection
-
-Bronze declarations cover Datastream CDC (`pos_orders_cdc`), Pub/Sub streaming (`pos_orders_stream_cdc`), and GCS batch (`pos_orders_batch_cdc`).
-
-When `include_stream_orders` or `include_batch_orders` is `"true"`, `fct_orders` unions normalized rows before calling `cdc_helpers.deduplicateCdc`.
-
-`cdc_helpers.parseLookbackDays` validates `cdc_lookback_days` (`1..3650`) to block SQL injection.
-
-Both `updatePartitionFilter` and the incremental `WHERE` filter use the same `cdc_lookback_days` window.
-
-Keeping both windows equal prevents late CDC updates from creating duplicate `order_id` rows.
-
-By default, `filter_cdc_deletes` is `"true"` and `includes/cdc_helpers.js` filters out deleted rows.
-
-Set `filter_cdc_deletes` to `"false"` for legacy Bronze tables lacking `_metadata_deleted`.
-
-## SCD Type 2 Change Deduplication
-
-`dim_customers` tracks `customer_ic_number`, `customer_email`, `customer_name`, `segment`, and `country_code` in `record_hash`.
-
-`scd_type2.scd2PreviousHashSql` removes consecutive unchanged CDC heartbeats before computing `LEAD(_ingested_at)` for `valid_to`.
-
-## Medallion Architecture
-
-```
-definitions/
-  01_bronze/      Raw CDC, stream, and batch source declarations (no DDL)
-  02_silver/      Conformed incremental and SCD2 tables with partition-pruned assertions
-  03_gold/
-    finance/      Incremental finance revenue marts
-    retail/       Incremental retail store performance marts
-envs/             Per-environment Dataform compilation override examples
-includes/         Reusable Dataform JS macros
-quality/          Dataplex Auto Data Quality rule specs
-tests/            Hermetic Python integrity test suite
-```
-
-1. **Bronze (`definitions/01_bronze/`)**: Holds Dataform `declaration` files only (`pos_orders_cdc`, `pos_orders_stream_cdc`, `pos_orders_batch_cdc`, `crm_customers_cdc`).
-2. **Silver (`definitions/02_silver/`)**: Conforms `fct_orders` and `dim_customers` with deduplication, SCD2 windows, dual Policy Tags, and assertions.
-3. **Gold (`definitions/03_gold/`)**: Incrementally aggregates Silver into partitioned marts (`mart_daily_revenue`, `mart_store_performance`) with lookback pruning.
-
-Tables with `requirePartitionFilter: true` use standalone assertion `.sqlx` files (`assert_fct_orders_quality.sqlx`) pruned by `cdc_lookback_days`.
-
-## Who Creates Bronze Tables
-
-Files in `definitions/01_bronze/` are Dataform `declaration` blocks only.
-
-They never run DDL or create Bronze tables.
-
-| Ingestion Path | Who Creates the Bronze Table | Terraform? |
-| :--- | :--- | :--- |
-| Datastream (CDC) | Datastream, automatically | No |
-| Fivetran / Airbyte / SaaS ELT | The connector | No |
-| Dataflow / Spark | The job (create-if-needed) | No |
-| Batch loads from GCS | Load job or Dataform `operations` step | No |
-| Pub/Sub -> BigQuery subscription | Must exist before the subscription; create it in the same Terraform as the subscription (platform/streaming owner) | Yes |
-
-> [!NOTE]
-> **Scaling via Data Mesh Split**
->
-> Keep one `gcp-data-medallion` repository with `CODEOWNERS` on `definitions/03_gold/<domain>/` for unified DAG lineage.
-> Split into domain repositories (`medallion-finance`, `medallion-retail`) when `CODEOWNERS` review load or DAG compile time becomes a bottleneck.
->
-> When splitting, Terraform in `gcp-foundation` provisions one `google_dataform_repository` per domain repository.
-> Each domain repository reads upstream Silver tables through Dataform `declaration` blocks.
-
-## Multi-Environment Promotion (`dev` to `staging` to `prod`)
-
-Per-environment Dataform overrides live under `envs/{dev,staging,prod}.compilation.json.example`.
-
-Workflow `.github/workflows/dataform-promote.yml` promotes Dataform releases via GitHub Environments and keyless OIDC WIF.
-
-- Pushes to `main` compile and update `dev-main`, then promote `staging-main` with strict PII checks.
-- Pushes of `v*` tags or manual `prod` dispatches compile immutable tags with `allow_untagged_pii: "false"` and patch `prod-main`.
-
-## Local Validation
-
-Run the hermetic test suite before committing changes.
+Run the hermetic test suite locally before committing changes.
 
 ```bash
 make test
 ```
 
-## Keyless PR Compilation Check
+## Documentation Index
 
-Workflow `.github/workflows/dataform-dryrun.yml` runs offline hermetic checks unconditionally on every PR and push.
-
-When WIF variables exist, it calls Dataform GA `v1` `compilationResults` over OIDC.
-
-If `PII_MASKED_POLICY_TAG` and `PII_RESTRICTED_POLICY_TAG` are configured, it enforces `allow_untagged_pii: "false"`.
-
-| Repository Variable | Example Value | Purpose |
-| :--- | :--- | :--- |
-| `GCP_WIF_PROVIDER` | `projects/123/locations/global/workloadIdentityPools/gh/providers/repo` | Workload Identity Pool provider resource path |
-| `GCP_WIF_SERVICE_ACCOUNT` | `dataform-ci@example-silver-project.iam.gserviceaccount.com` | Service account granted Dataform viewer or runner roles |
-| `DATAFORM_REPO_PATH` | `projects/example-silver-project/locations/asia-southeast1/repositories/medallion` | Target BigQuery Dataform repository resource name |
-
-The check avoids service account JSON keys and fails if `compilationErrors` is non-empty.
+- [Medallion Onboarding Questionnaire](QUESTIONNAIRE.md)
+- [Architecture and Dataform SQLX Reference](docs/01-architecture-and-sqlx-reference.md)
+- [Enterprise Medallion Operationalization Guide](docs/02-enterprise-operationalization-guide.md)
+- [GCP Launchpad (Suite Hub & Brownfield Bridge)](https://github.com/choo737/gcp-launchpad)
+- [GCP Foundation (Landing Zone & Dataform Terraform)](https://github.com/choo737/gcp-foundation)
+- [GCP Data Ingestion (Datastream, Pub/Sub & Batch ELT)](https://github.com/choo737/gcp-data-ingestion)
 
 ## License
 

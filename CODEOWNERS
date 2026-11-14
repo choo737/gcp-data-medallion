@@ -1,3 +1,10 @@
-# Domain owners review and approve Gold mart changes.
+# Default repository owner and path-scoped domain reviewers.
+# Replace @example-org teams with your private repository GitHub teams on Day 0.
+* @choo737
+
+/definitions/01_bronze/ @example-org/data-platform-leads
+/definitions/02_silver/ @example-org/analytics-engineering-leads
 /definitions/03_gold/finance/ @example-org/finance-data-leads
 /definitions/03_gold/retail/ @example-org/retail-data-leads
+/quality/ @example-org/data-governance-leads
+/.github/workflows/ @example-org/platform-security-leads
