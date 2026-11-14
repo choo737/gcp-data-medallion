@@ -39,7 +39,6 @@ REQUIRED_FILES = (
     "README.md",
     "AGENTS.md",
     "CLAUDE.md",
-    "GEMINI.md",
     "QUESTIONNAIRE.md",
     ".github/workflows/ci.yml",
     ".github/workflows/dataform-dryrun.yml",
@@ -70,7 +69,6 @@ MARKDOWN_DOC_FILES = (
     "README.md",
     "AGENTS.md",
     "CLAUDE.md",
-    "GEMINI.md",
     "QUESTIONNAIRE.md",
     ".agents/skills/add-medallion-model/SKILL.md",
     ".agents/skills/setup-data-medallion/SKILL.md",
@@ -1197,7 +1195,7 @@ assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTE
         ):
             self.assertIn(expected, setup_skill)
 
-        for doc_name in ("README.md", "AGENTS.md", "CLAUDE.md", "GEMINI.md"):
+        for doc_name in ("README.md", "AGENTS.md", "CLAUDE.md"):
             doc_text = (REPO_ROOT / doc_name).read_text(encoding="utf-8")
             self.assertIn("QUESTIONNAIRE.md", doc_text, f"{doc_name} must reference QUESTIONNAIRE.md.")
             self.assertIn(
@@ -1219,10 +1217,7 @@ assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTE
         agents_text = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn(".agents/skills/add-medallion-model/SKILL.md", agents_text)
         self.assertIn(".agents/skills/split-domain-mesh/SKILL.md", agents_text)
-
-        claude_body = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8").split("\n", 1)[1]
-        gemini_body = (REPO_ROOT / "GEMINI.md").read_text(encoding="utf-8").split("\n", 1)[1]
-        self.assertEqual(claude_body, gemini_body, "CLAUDE.md and GEMINI.md must stay aligned.")
+        self.assertFalse((REPO_ROOT / "GEMINI.md").exists(), "GEMINI.md must not exist.")
 
     def test_dataform_workflows_security_and_contract(self):
         workflow_files = sorted((REPO_ROOT / ".github/workflows").glob("*.yml"))
