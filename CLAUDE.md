@@ -4,7 +4,7 @@ Read [AGENTS.md](AGENTS.md) before modifying any file in this repository.
 
 ## Key Invariants
 
-- Follow the Bronze (`declaration`), Silver (`incremental`/`table` + dual Policy Tags + assertions), and Gold (`incremental` + lookback filter + assertions) rules.
+- Follow Bronze (`declaration`), Silver (dual Policy Tags and assertions), and Gold (incremental lookback and assertions) rules.
 - Exclude CDC delete tombstones in Silver using `includes/cdc_helpers.js` (`cdc_helpers.activeCdcFilter()`).
 - Keep `fct_orders` `updatePartitionFilter` and incremental `WHERE` aligned via `cdc_helpers.lookbackDays()`.
 - Never write `SELECT *` in `.sqlx` or `.js` files.

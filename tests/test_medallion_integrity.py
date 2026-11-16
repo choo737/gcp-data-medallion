@@ -40,6 +40,8 @@ REQUIRED_FILES = (
     "AGENTS.md",
     "CLAUDE.md",
     "QUESTIONNAIRE.md",
+    "assets/cloud-city-medallion.webp",
+    "assets/cloud-city-medallion.gif",
     "docs/01-architecture-and-sqlx-reference.md",
     "docs/02-enterprise-operationalization-guide.md",
     ".github/workflows/ci.yml",
@@ -171,6 +173,7 @@ EMOJI_PATTERN = re.compile(
 )
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", ".pytest_cache"}
+BINARY_EXTENSIONS = {".webp", ".gif", ".png", ".jpg", ".jpeg"}
 
 
 def iter_repo_files():
@@ -179,6 +182,8 @@ def iter_repo_files():
         if not path.is_file():
             continue
         if any(part in SKIP_DIRS for part in path.relative_to(REPO_ROOT).parts):
+            continue
+        if path.suffix.lower() in BINARY_EXTENSIONS:
             continue
         yield path
 
@@ -362,7 +367,7 @@ def extract_markdown_prose_lines(markdown_text):
             continue
         if in_code or not line:
             continue
-        if line.startswith("#") or line.startswith("|") or line.startswith("> [!"):
+        if line.startswith("#") or line.startswith("|") or line.startswith("> [!") or line.startswith(("<picture", "</picture", "<source", "<img", "![")):
             continue
         if line.startswith(">"):
             line = line.lstrip("> ").strip()
@@ -1402,6 +1407,12 @@ assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTE
             for line in extract_markdown_prose_lines(text):
                 sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", line) if s.strip()]
                 for sentence in sentences:
+                    ws_words = [w for w in sentence.split() if w]
+                    self.assertLessEqual(
+                        len(ws_words),
+                        20,
+                        f"{rel_path}: prose sentence exceeds 20 words ({len(ws_words)}): {sentence}",
+                    )
                     words = re.findall(r"[A-Za-z0-9_./:-]+", sentence)
                     self.assertLessEqual(
                         len(words),
@@ -1463,6 +1474,22 @@ assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTE
                 match,
                 f"{rel}: forbidden AI filler term '{match.group(0) if match else ''}'.",
             )
+
+    def test_visual_assets_have_valid_headers(self):
+        webp_path = REPO_ROOT / "assets" / "cloud-city-medallion.webp"
+        gif_path = REPO_ROOT / "assets" / "cloud-city-medallion.gif"
+
+        for asset_path in (webp_path, gif_path):
+            with self.subTest(asset=str(asset_path.relative_to(REPO_ROOT))):
+                self.assertTrue(asset_path.is_file(), f"Missing {asset_path}")
+                self.assertGreater(asset_path.stat().st_size, 100_000)
+
+        webp_head = webp_path.read_bytes()[:12]
+        self.assertEqual(webp_head[:4], b"RIFF")
+        self.assertEqual(webp_head[8:12], b"WEBP")
+
+        gif_head = gif_path.read_bytes()[:6]
+        self.assertEqual(gif_head, b"GIF89a")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,14 @@ This repository belongs to the [gcp-launchpad](https://github.com/choo737/gcp-la
 
 ## Template Suite Overview
 
+<picture>
+  <source type="image/webp" srcset="assets/cloud-city-medallion.webp">
+  <img src="assets/cloud-city-medallion.gif" alt="Cloud City Layer 03 Data Medallion Architecture" width="100%">
+</picture>
+
+This repository builds **Layer 03**: copper Bronze raw silos and overhead Dataform SQLX piping.
+It also runs the Silver PII and AutoDQ lab plus Gold analytics marts.
+
 Start in [gcp-launchpad](https://github.com/choo737/gcp-launchpad) for multi-repo routing, or use this repository standalone against existing BigQuery Bronze tables.
 
 | Repository | Role | Scope | Status |
@@ -100,6 +108,7 @@ Three GitHub Actions workflows enforce SQLX hygiene, keyless Dataform compilatio
 
 ## Repository Layout
 
+- `assets/`: Cloud City Layer 03 visual architecture animations.
 - `workflow_settings.yaml`: Dataform `3.1.5` root configuration and 16 compilation `vars` (no `package.json`).
 - `definitions/01_bronze/`: Raw CDC, stream, and batch source `declaration` files (no DDL).
 - `definitions/02_silver/`: Conformed `fct_orders`, `dim_customers` SCD2, dual Policy Tags, and standalone partition-pruned assertions.
