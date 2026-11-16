@@ -8,11 +8,11 @@ This repository belongs to the [gcp-launchpad](https://github.com/choo737/gcp-la
 
 <picture>
   <source type="image/webp" srcset="assets/cloud-city-medallion.webp">
-  <img src="assets/cloud-city-medallion.gif" alt="Cloud City Layer 03 Data Medallion Architecture" width="100%">
+  <img src="assets/cloud-city-medallion.gif" alt="Layer 03 data warehouse overview" width="100%">
 </picture>
 
-This repository builds **Layer 03**: copper Bronze raw silos and overhead Dataform SQLX piping.
-It also runs the Silver PII and AutoDQ lab plus Gold analytics marts.
+`gcp-data-medallion` owns **Layer 03**: Bronze source declarations and Dataform SQLX warehouse models.
+It enforces dual PII policy tags, Dataplex quality checks, and Gold domain marts.
 
 Start in [gcp-launchpad](https://github.com/choo737/gcp-launchpad) for multi-repo routing, or use this repository standalone against existing BigQuery Bronze tables.
 
