@@ -6,10 +6,7 @@ This repository belongs to the [gcp-launchpad](https://github.com/choo737/gcp-la
 
 ## Template Suite Overview
 
-<picture>
-  <source type="image/webp" srcset="assets/cloud-city-medallion.webp">
-  <img src="assets/cloud-city-medallion.gif" alt="Layer 03 data warehouse overview" width="100%">
-</picture>
+<img src="assets/cloud-city-medallion.webp" alt="Layer 03 data warehouse overview" width="100%">
 
 `gcp-data-medallion` owns **Layer 03**: Bronze source declarations and Dataform SQLX warehouse models.
 It enforces dual PII policy tags, Dataplex quality checks, and Gold domain marts.
