@@ -25,9 +25,11 @@ Confirm the final command prints `true`.
 
 Check whether `platform-context.json` exists from [choo737/gcp-launchpad](https://github.com/choo737/gcp-launchpad) in the repository root.
 
-1. Read `platform-context.json` if present to prefill project IDs, region, dataset names, and Policy Tags.
-2. Confirm `platform-context.json` and `envs/*.compilation.json` are gitignored before writing customer values.
-3. Proceed directly to `QUESTIONNAIRE.md` when running standalone without `gcp-launchpad`.
+1. Read `platform-context.json` if present to prefill project IDs, location, dataset names, and Policy Tags.
+2. Map `primary_region` to `defaultLocation` (`location`) and `existing_landing_zone.core_project_id` to `bronze_project`.
+3. Map `compute_project_id` to `silver_project` when shared, `analytics_project_id` to `gold_project`, and `pii_*_policy_tag_id` to `pii_*_policy_tag`.
+4. Confirm `platform-context.json` and `envs/*.compilation.json` are gitignored before writing customer values.
+5. Proceed directly to `QUESTIONNAIRE.md` when running standalone without `gcp-launchpad`.
 
 ## Step 2: Walk Through QUESTIONNAIRE.md
 
