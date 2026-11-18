@@ -24,6 +24,7 @@ flowchart LR
   subgraph Gold["03_gold (Domain Marts) & DQ"]
     G1["finance/mart_daily_revenue"]
     G2["retail/mart_store_performance"]
+    G3["mlops/mart_xai_shap_drift"]
     DQ["Dataplex Auto DQ"]
   end
 
@@ -156,7 +157,7 @@ Protect `prod` SLAs and partition filters during historical reloads and schema u
 
 ### Triaging Assertion and Dataplex Failures
 
-- When Dataform `assert_<entity>_quality.sqlx` or Dataplex Auto DQ fails, halt downstream Gold runs before BI exposure.
+- When Dataform `assert_<entity>_quality.sqlx`, `assert_xai_shap_additivity.sqlx`, or Dataplex Auto DQ fails, halt downstream Gold runs before BI exposure.
 - Filter the failing partition slice by `order_date`, fix the ingestion or SQLX bug, and rerun.
 
 ---

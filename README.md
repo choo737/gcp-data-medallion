@@ -19,6 +19,7 @@ Start in [gcp-launchpad](https://github.com/choo737/gcp-launchpad) for multi-rep
 | [gcp-foundation](https://github.com/choo737/gcp-foundation) | Platform & Governance | Org guardrails, projects, KMS, datasets, Policy Tags, and Dataform repositories | Active |
 | [gcp-data-ingestion](https://github.com/choo737/gcp-data-ingestion) | Bronze Ingestion | Datastream CDC, Pub/Sub streaming, Cloud Run batch ELT, and Cloud Workflows | Active |
 | **[gcp-data-medallion](https://github.com/choo737/gcp-data-medallion)** *(this repo)* | Warehouse & Quality | Dataform `3.1.5` SQLX Medallion (`01_bronze` -> `02_silver` -> `03_gold`) and Dataplex DQ | Active |
+| [gcp-data-science](https://github.com/choo737/gcp-data-science) | Data Science & XAI | Regulated ML pipelines, custom SHAP containers, model gates, and XAI drift ops | Active |
 | `gcp-webapp` | Application Layer | HA Cloud Run web portal with External HTTPS Load Balancer and Cloud SQL | Planned |
 | `gcp-adk-agent` | AI Agent Layer | Production Google ADK agent on Vertex AI Agent Engine or Cloud Run | Planned |
 
@@ -48,7 +49,7 @@ flowchart LR
 - **Aligned CDC Lookback**: Keeps `updatePartitionFilter` and incremental `WHERE` equal via `cdc_lookback_days` (`1..3650`) to prevent duplicate keys.
 - **SCD Type 2 Heartbeat Deduplication**: Strips consecutive unchanged snapshots with `scd_type2.scd2PreviousHashSql` before computing `valid_from`, `valid_to`, and `is_current`.
 
-Read [docs/01-architecture-and-sqlx-reference.md](docs/01-architecture-and-sqlx-reference.md) for all 16 contract variables, helper internals, and Bronze ownership rules.
+Read [docs/01-architecture-and-sqlx-reference.md](docs/01-architecture-and-sqlx-reference.md) for all 18 contract variables, helper internals, and Bronze ownership rules.
 
 ## 6-Step Enterprise Operationalization
 
@@ -106,10 +107,10 @@ Three GitHub Actions workflows enforce SQLX hygiene, keyless Dataform compilatio
 ## Repository Layout
 
 - `assets/`: Cloud City Layer 03 visual architecture animations.
-- `workflow_settings.yaml`: Dataform `3.1.5` root configuration and 16 compilation `vars` (no `package.json`).
-- `definitions/01_bronze/`: Raw CDC, stream, and batch source `declaration` files (no DDL).
-- `definitions/02_silver/`: Conformed `fct_orders`, `dim_customers` SCD2, dual Policy Tags, and standalone partition-pruned assertions.
-- `definitions/03_gold/`: Incremental domain marts under `finance/` and `retail/` with lookback pruning.
+- `workflow_settings.yaml`: Dataform `3.1.5` root configuration and 18 compilation `vars` (no `package.json`).
+- `definitions/01_bronze/`: Raw CDC, stream, batch, and `ml_xai_audit_ledger` source `declaration` files (no DDL).
+- `definitions/02_silver/`: Conformed `fct_orders`, `dim_customers`, `ml_customer_features`, dual Policy Tags, and partition-pruned assertions.
+- `definitions/03_gold/`: Incremental domain marts under `finance/`, `retail/`, and `mlops/` with lookback pruning.
 - `includes/`: Reusable JavaScript helpers (`audit_columns.js`, `cdc_helpers.js`, `policy_tags.js`, `scd_type2.js`).
 - `quality/`: Dataplex Auto Data Quality rule specifications (`silver_orders_quality.yaml`).
 - `envs/`: Example per-environment compilation overrides (`{dev,staging,prod}.compilation.json.example`).

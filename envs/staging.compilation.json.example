@@ -18,6 +18,8 @@
     "filter_cdc_deletes": "true",
     "cdc_lookback_days": "14",
     "include_stream_orders": "true",
-    "include_batch_orders": "true"
+    "include_batch_orders": "true",
+    "ml_audit_project": "example-staging-ml-ops",
+    "ml_audit_dataset": "ml_xai_audit"
   }
 }

@@ -1,0 +1,27 @@
+config {
+  type: "declaration",
+  database: dataform.projectConfig.vars.ml_audit_project,
+  schema: dataform.projectConfig.vars.ml_audit_dataset,
+  name: "ml_xai_audit_ledger",
+  description: "Regulated explainable AI decision audit ledger provisioned by gcp-foundation stage 03-data-science.",
+  columns: {
+    decision_id: "Unique decision or scoring request identifier.",
+    entity_id: "Entity or customer identifier scored by the model.",
+    decision_timestamp: "UTC timestamp when the model prediction and explanation were emitted.",
+    serving_track: "Serving track identifier (for example primary or shadow).",
+    model_id: "Registered Vertex AI model identifier.",
+    model_version_id: "Registered Vertex AI model version identifier.",
+    model_artifact_sha256: "SHA-256 digest of the serialized model artifact.",
+    container_image_digest: "Immutable Artifact Registry container image digest.",
+    schema_version: "Feature and explanation payload contract version.",
+    explained_class: "Target class label explained by SHAP logits.",
+    approve_prob: "Predicted positive class probability.",
+    raw_margin: "Raw model margin in log-odds space before link transformation.",
+    base_logit: "SHAP expected baseline value in log-odds space.",
+    shap_sum_logit: "Sum of feature SHAP attributions in log-odds space.",
+    shap_logit_map: "JSON map of feature names to SHAP logit contributions.",
+    top_adverse_reasons: "JSON array of top adverse reason codes and descriptions.",
+    feature_payload: "JSON object of governed input feature values used at inference.",
+    reason_rule_version: "Adverse action reason-code mapping version."
+  }
+}

@@ -53,6 +53,8 @@ Contract variables in `workflow_settings.yaml` connect Terraform outputs and ing
 | `cdc_lookback_days` | `"30"` | Rolling partition lookback window in days (`1..3650`) |
 | `include_stream_orders` | `"false"` | Set to `"true"` to union `pos_orders_stream_cdc` into `fct_orders` |
 | `include_batch_orders` | `"false"` | Set to `"true"` to union `pos_orders_batch_cdc` into `fct_orders` |
+| `ml_audit_project` | `example-ml-ops` | GCP project hosting `ml_xai_audit_ledger` from `03-data-science` |
+| `ml_audit_dataset` | `ml_xai_audit` | BigQuery dataset hosting `ml_xai_audit_ledger` |
 
 Override customer values in gitignored `envs/{dev,staging,prod}.compilation.json` or GitHub Environment variables.
 
@@ -101,11 +103,12 @@ definitions/
   03_gold/
     finance/      Incremental finance revenue marts
     retail/       Incremental retail store performance marts
+    mlops/        Incremental XAI attribution and probability drift marts
 ```
 
-1. **Bronze (`definitions/01_bronze/`)**: Holds Dataform `declaration` files only (`pos_orders_cdc`, `pos_orders_stream_cdc`, `pos_orders_batch_cdc`, `crm_customers_cdc`).
-2. **Silver (`definitions/02_silver/`)**: Conforms `fct_orders` and `dim_customers` with deduplication, SCD2 windows, dual Policy Tags, and assertions.
-3. **Gold (`definitions/03_gold/`)**: Incrementally aggregates Silver into partitioned marts (`mart_daily_revenue`, `mart_store_performance`) with lookback pruning.
+1. **Bronze (`definitions/01_bronze/`)**: Holds Dataform `declaration` files only (`pos_orders_cdc`, `pos_orders_stream_cdc`, `pos_orders_batch_cdc`, `crm_customers_cdc`, `ml_xai_audit_ledger`).
+2. **Silver (`definitions/02_silver/`)**: Conforms `fct_orders`, `dim_customers`, and `ml_customer_features` with dual Policy Tags and assertions (`assert_fct_orders_quality`, `assert_ml_customer_features_quality`, `assert_xai_shap_additivity`).
+3. **Gold (`definitions/03_gold/`)**: Incrementally aggregates Silver into partitioned marts (`mart_daily_revenue`, `mart_store_performance`, `mart_xai_shap_drift`) with lookback pruning.
 
 Tables with `requirePartitionFilter: true` use standalone assertion `.sqlx` files (`assert_fct_orders_quality.sqlx`) pruned by `cdc_lookback_days`.
 

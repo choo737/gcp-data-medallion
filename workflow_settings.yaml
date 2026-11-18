@@ -20,3 +20,5 @@ vars:
   cdc_lookback_days: "30"
   include_stream_orders: "false"
   include_batch_orders: "false"
+  ml_audit_project: example-ml-ops
+  ml_audit_dataset: ml_xai_audit

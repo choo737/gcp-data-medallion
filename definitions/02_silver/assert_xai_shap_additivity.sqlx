@@ -1,0 +1,23 @@
+config {
+  type: "assertion",
+  database: dataform.projectConfig.vars.silver_project,
+  description: "Partition-pruned SHAP logit additivity and provenance digest assertion on ml_xai_audit_ledger."
+}
+
+SELECT
+  decision_id,
+  model_id,
+  model_version_id,
+  decision_timestamp,
+  raw_margin,
+  base_logit,
+  shap_sum_logit,
+  container_image_digest,
+  model_artifact_sha256
+FROM ${ref("ml_xai_audit_ledger")}
+WHERE DATE(decision_timestamp) >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+  AND (
+    ABS((base_logit + shap_sum_logit) - raw_margin) > 0.00001 * GREATEST(1.0, ABS(raw_margin))
+    OR TRIM(IFNULL(container_image_digest, '')) = ''
+    OR TRIM(IFNULL(model_artifact_sha256, '')) = ''
+  )

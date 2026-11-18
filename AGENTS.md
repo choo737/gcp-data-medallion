@@ -5,9 +5,9 @@ This file defines repository rules for OpenAI Codex, Antigravity, Cursor, and Am
 ## Medallion Layer Contract
 
 - **`definitions/01_bronze/`**: Use `type: "declaration"` only. Never define tables or views in Bronze. Document `_metadata_deleted` on CDC declarations.
-- **`definitions/02_silver/`**: Build conformed incremental or SCD Type 2 tables. Attach `policy_tags.piiRestrictedPolicyTag()` or `policy_tags.piiMaskedPolicyTag()` to PII columns. Filter CDC tombstones with `cdc_helpers.activeCdcFilter()`.
-- **Partitioned Assertions**: Never use inline `assertions` when `requirePartitionFilter: true` is enabled. Create a standalone `type: "assertion"` file pruned by `cdc_helpers.lookbackDays()`.
-- **`definitions/03_gold/`**: Group marts by business domain (`finance/`, `retail/`). Use incremental merges with `updatePartitionFilter` and `order_date` filters driven by `cdc_helpers.lookbackDays()`. Define `assertions` on every mart.
+- **`definitions/02_silver/`**: Build conformed incremental or SCD Type 2 tables. Attach `policy_tags.piiRestrictedPolicyTag()` or `policy_tags.piiMaskedPolicyTag()` to PII columns. Filter CDC tombstones with `cdc_helpers.activeCdcFilter()`. Exclude restricted identity columns from `ml_customer_features`.
+- **Partitioned Assertions**: Never use inline `assertions` when `requirePartitionFilter: true` is enabled. Create a standalone `type: "assertion"` file pruned by partition date (`assert_fct_orders_quality`, `assert_ml_customer_features_quality`, `assert_xai_shap_additivity`).
+- **`definitions/03_gold/`**: Group marts by business domain (`finance/`, `retail/`, `mlops/`). Use incremental merges with `updatePartitionFilter` and partition filters driven by `cdc_helpers.lookbackDays()`. Define `assertions` on every mart.
 - **SQLX Hygiene**: Never use `SELECT *`. Project every column explicitly. Keep `config { ... }` braces balanced.
 
 ## Reusable Helpers (`includes/`)

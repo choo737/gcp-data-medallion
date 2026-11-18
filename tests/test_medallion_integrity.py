@@ -28,6 +28,8 @@ REQUIRED_VARS = (
     "cdc_lookback_days",
     "include_stream_orders",
     "include_batch_orders",
+    "ml_audit_project",
+    "ml_audit_dataset",
 )
 
 REQUIRED_FILES = (
@@ -61,11 +63,16 @@ REQUIRED_FILES = (
     "definitions/01_bronze/pos_orders_stream_cdc.sqlx",
     "definitions/01_bronze/pos_orders_batch_cdc.sqlx",
     "definitions/01_bronze/crm_customers_cdc.sqlx",
+    "definitions/01_bronze/ml_xai_audit_ledger.sqlx",
     "definitions/02_silver/fct_orders.sqlx",
     "definitions/02_silver/assert_fct_orders_quality.sqlx",
     "definitions/02_silver/dim_customers.sqlx",
+    "definitions/02_silver/ml_customer_features.sqlx",
+    "definitions/02_silver/assert_ml_customer_features_quality.sqlx",
+    "definitions/02_silver/assert_xai_shap_additivity.sqlx",
     "definitions/03_gold/finance/mart_daily_revenue.sqlx",
     "definitions/03_gold/retail/mart_store_performance.sqlx",
+    "definitions/03_gold/mlops/mart_xai_shap_drift.sqlx",
 )
 
 MARKDOWN_DOC_FILES = (
@@ -93,15 +100,38 @@ CANONICAL_README_H2_SECTIONS = (
     "## License",
 )
 
-# SHA-256 digests of forbidden internal identifiers so plaintext secrets stay out of the repo.
+# SHA-256 digests of forbidden customer and internal tokens so plaintext stays out of the repo.
 FORBIDDEN_TOKEN_SHA256 = {
-    "4e41237f5f263ce5dc9566a6ba831e3b732297c006415ec51c16b440d4e7c962",
-    "a1ff4908fbe5168909d20652cd786c91f25e62668cb7704e00b76b48bbd77061",
-    "bf2e17a1a6bc6728a531b1f29fc3e9344836b4ee2dbc4826d52e7fad1ab903b4",
     "28a6c9ad99acc2abeef4831da37cf37001345f05fa7327562ee4a9b167019b04",
-    "9df5c2af39fc3666ac0676a762ef08a86c0f0f7451976f7d290e329b07a5241e",
+    "bf2e17a1a6bc6728a531b1f29fc3e9344836b4ee2dbc4826d52e7fad1ab903b4",
+    "a1ff4908fbe5168909d20652cd786c91f25e62668cb7704e00b76b48bbd77061",
+    "39c55727348dc27b1dfcca0c18ef5b993b5c5d05c35e84dda10667ffbf4901dd",
+    "b39879ae27ef3ea552c5b1ef0d2e27d31e1e86fd9000f8e790efac1d4d66993b",
+    "f7bed5a9de858cf4a466529421cb2394beafac86339684ef34b831877a0ae5d9",
+    "cfb193f5ee1e7027fe5cfaaac3069069112470cd1de7dde83c109cfadd078f5a",
+    "7ce3b7e784772b32867cef471271a3ddf571d4197f8e0a948d9106fa8470b2fe",
     "d43e610ed1d8b1bdf2fc1d636d5db802e331d6c3e8467e65f26b1ed874f5ad55",
+    "05bc6fa1ff0770f5de13c86f1d27418c938adea2dac09bf99680e8c31bf89c1c",
+    "8d2d5be141e37e13f3eaa4a427c1c998eb2f3f9d66d22bb85322e4f5e1cc65f5",
+    "ff395a42edbe5317b427b2d700de5be8c6452880ba9a46f66391de6907b887b2",
     "bcaeb7aaf13db3381e1c0c07ca7d7c9e0b58bb1a77aa177c420d9ddc1f42b72f",
+    "eadba710424a7ccf76ee3a5b175ea916c5095c23e0c9eb73cd06e0bd391a88de",
+    "ea3b268fa7164cf31bb5a5b7d5a70a1da3411e7d2bb36734dca05bd4d97e611d",
+    "fc3fcf326138c3a556919d0e9e38100c7f3d8ead8a6a2f2b80af0bb3bc3e7ad7",
+    "d4d98d8e8d9d1caf68c53b512ffa9add380e62dde5437cf9a3dec954b87e4bd1",
+    "8aabce2e29396d5ce7e7ff8a0c76829c638938d3dd86642dfa8d4f7850492673",
+    "159bc6a26ae434afaf52019da41182f185220ad04d4a330e4cd42c631f58adf8",
+    "49abed4953748a8a9a8295f28fe864af4ce0d856e0fa9f69ee1a4463cb246239",
+    "13ed7955a8035437bf820cb1d940b7c222b86030834d0aecf9333acfa50735b4",
+    "4e41237f5f263ce5dc9566a6ba831e3b732297c006415ec51c16b440d4e7c962",
+    "b0b70f066e82230c9ae95610a7aeec44a28f8cf4c6d2edb1e4e231027055469f",
+    "d599e93c589788ef7cf53ec1c648cc1c64244ce66b8d1785aa5b7293a8d97a68",
+    "42db212c2a8ab6fe26978fadcba7c6f3c8c9ae7a81a7af34930ca174fede649b",
+    "4c77cac1139b0f6d8f1811079c7e14daf82696b71a8804722e9fc44a509c1fc4",
+    "188e6a694d69c6728ad7ea2ba5b5553dda27478b1bc2e4bb7cc50850280742bd",
+    "c4c86be45204a944b7d1ffe6d5adec4f8bdfb7784b45b6c24d78f6e3ed9bccca",
+    "133937e4fbee1a2cc88b809af2ff3ff8a964a8f4c6cd5996af6d49b10c50d203",
+    "9df5c2af39fc3666ac0676a762ef08a86c0f0f7451976f7d290e329b07a5241e",
 }
 FORBIDDEN_TOKEN_LENGTHS = (6, 9, 12, 17)
 
@@ -444,6 +474,8 @@ class MedallionIntegrityTest(unittest.TestCase):
         self.assertEqual(vars_map["cdc_lookback_days"], "30")
         self.assertEqual(vars_map["include_stream_orders"], "false")
         self.assertEqual(vars_map["include_batch_orders"], "false")
+        self.assertEqual(vars_map["ml_audit_project"], "example-ml-ops")
+        self.assertEqual(vars_map["ml_audit_dataset"], "ml_xai_audit")
 
     def test_includes_helpers_present(self):
         node_bin = shutil.which("node")
@@ -859,6 +891,50 @@ const assertRes = evalSqlx("definitions/02_silver/assert_fct_orders_quality.sqlx
   cdc_lookback_days: "14"
 }, false);
 assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)"));
+
+// 6. Regulated XAI & governed ML feature SQLX templates
+const xaiBronzeRes = evalSqlx("definitions/01_bronze/ml_xai_audit_ledger.sqlx", {
+  ml_audit_project: "ent-ml-ops",
+  ml_audit_dataset: "ent_ml_xai_audit"
+}, false);
+assert.strictEqual(xaiBronzeRes.cfg.type, "declaration");
+assert.strictEqual(xaiBronzeRes.cfg.database, "ent-ml-ops");
+assert.strictEqual(xaiBronzeRes.cfg.schema, "ent_ml_xai_audit");
+assert.strictEqual(xaiBronzeRes.cfg.name, "ml_xai_audit_ledger");
+
+const mlFeaturesRes = evalSqlx("definitions/02_silver/ml_customer_features.sqlx", {
+  silver_project: "p",
+  silver_dataset: "silver",
+  pii_masked_policy_tag: maskedTag,
+  allow_untagged_pii: "false",
+  cdc_lookback_days: "14"
+}, true);
+assert.strictEqual(mlFeaturesRes.cfg.bigquery.partitionBy, "feature_date");
+assert.strictEqual(mlFeaturesRes.cfg.bigquery.requirePartitionFilter, true);
+assert.deepStrictEqual(Array.from(mlFeaturesRes.cfg.columns.customer_email.bigqueryPolicyTags), [maskedTag]);
+assert(!mlFeaturesRes.sql.includes("customer_ic_number"));
+
+const mlFeaturesAssertRes = evalSqlx("definitions/02_silver/assert_ml_customer_features_quality.sqlx", {
+  silver_project: "p"
+}, false);
+assert(mlFeaturesAssertRes.sql.includes("WHERE feature_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)"));
+
+const shapAssertRes = evalSqlx("definitions/02_silver/assert_xai_shap_additivity.sqlx", {
+  silver_project: "p"
+}, false);
+assert(shapAssertRes.sql.includes("ABS((base_logit + shap_sum_logit) - raw_margin) > 0.00001"));
+assert(shapAssertRes.sql.includes("container_image_digest"));
+assert(shapAssertRes.sql.includes("model_artifact_sha256"));
+
+const xaiDriftRes = evalSqlx("definitions/03_gold/mlops/mart_xai_shap_drift.sqlx", {
+  gold_project: "p",
+  gold_dataset: "gold",
+  cdc_lookback_days: "14"
+}, true);
+assert.strictEqual(xaiDriftRes.cfg.type, "incremental");
+assert.strictEqual(xaiDriftRes.cfg.bigquery.partitionBy, "decision_date");
+assert(xaiDriftRes.sql.includes("max_abs_attribution_shift"));
+assert(xaiDriftRes.sql.includes("prediction_jsd"));
 """
         run_node_script(script, "SQLX template evaluation check")
 
@@ -867,8 +943,8 @@ assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTE
         sqlx_files = sorted(definitions_dir.rglob("*.sqlx"))
         self.assertEqual(
             len(sqlx_files),
-            9,
-            "Expected 4 Bronze, 2 Silver tables, 1 Silver assertion, and 2 Gold SQLX files.",
+            14,
+            "Expected 5 Bronze, 3 Silver tables, 3 Silver assertions, and 3 Gold SQLX files.",
         )
 
         for sqlx_path in sqlx_files:
@@ -1038,6 +1114,43 @@ assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTE
             "dataform.projectConfig.vars.gold_retail_dataset || dataform.projectConfig.vars.gold_dataset",
             retail_mart,
         )
+
+        xai_bronze = (REPO_ROOT / "definitions/01_bronze/ml_xai_audit_ledger.sqlx").read_text(encoding="utf-8")
+        for col_name in (
+            "decision_id",
+            "entity_id",
+            "decision_timestamp",
+            "serving_track",
+            "model_id",
+            "model_version_id",
+            "model_artifact_sha256",
+            "container_image_digest",
+            "schema_version",
+            "explained_class",
+            "approve_prob",
+            "raw_margin",
+            "base_logit",
+            "shap_sum_logit",
+            "shap_logit_map",
+            "top_adverse_reasons",
+            "feature_payload",
+            "reason_rule_version",
+        ):
+            self.assertIn(col_name, xai_bronze)
+
+        ml_features = (REPO_ROOT / "definitions/02_silver/ml_customer_features.sqlx").read_text(encoding="utf-8")
+        self.assertNotIn("customer_ic_number", ml_features)
+        self.assertIn('policy_tags.piiColumnConfig("Customer email address.", "masked")', ml_features)
+        self.assertIn("requirePartitionFilter: true", ml_features)
+
+        shap_assert = (REPO_ROOT / "definitions/02_silver/assert_xai_shap_additivity.sqlx").read_text(encoding="utf-8")
+        self.assertIn("ABS((base_logit + shap_sum_logit) - raw_margin) > 0.00001 * GREATEST(1.0, ABS(raw_margin))", shap_assert)
+        self.assertIn("container_image_digest", shap_assert)
+        self.assertIn("model_artifact_sha256", shap_assert)
+
+        xai_drift = (REPO_ROOT / "definitions/03_gold/mlops/mart_xai_shap_drift.sqlx").read_text(encoding="utf-8")
+        self.assertIn("max_abs_attribution_shift", xai_drift)
+        self.assertIn("prediction_jsd", xai_drift)
 
     def test_env_compilation_examples_valid(self):
         tag_pattern = re.compile(
@@ -1420,10 +1533,27 @@ assert(assertRes.sql.includes("WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTE
                     )
 
     def test_no_leaked_internal_identifiers(self):
+        alnum_re = re.compile(r"[a-z0-9]+")
         for file_path in iter_repo_files():
             rel = file_path.relative_to(REPO_ROOT).as_posix()
             text = file_path.read_text(encoding="utf-8", errors="ignore")
             lowered = text.lower()
+
+            tokens = alnum_re.findall(lowered)
+            for idx, tok in enumerate(tokens):
+                digest = hashlib.sha256(tok.encode("utf-8")).hexdigest()
+                self.assertNotIn(
+                    digest,
+                    FORBIDDEN_TOKEN_SHA256,
+                    f"{rel}: detected forbidden customer or internal identifier token.",
+                )
+                if idx + 1 < len(tokens):
+                    pair_digest = hashlib.sha256((tok + tokens[idx + 1]).encode("utf-8")).hexdigest()
+                    self.assertNotIn(
+                        pair_digest,
+                        FORBIDDEN_TOKEN_SHA256,
+                        f"{rel}: detected forbidden customer or internal identifier token pair.",
+                    )
 
             for size in FORBIDDEN_TOKEN_LENGTHS:
                 if len(lowered) < size:

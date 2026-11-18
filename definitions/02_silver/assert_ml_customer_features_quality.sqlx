@@ -1,0 +1,23 @@
+config {
+  type: "assertion",
+  database: dataform.projectConfig.vars.silver_project,
+  description: "Partition-pruned quality check for ml_customer_features ensuring non-null keys and non-negative metrics."
+}
+
+SELECT
+  feature_date,
+  customer_id,
+  rolling_order_count,
+  rolling_gross_spend,
+  rolling_net_spend,
+  days_since_last_order
+FROM ${ref("ml_customer_features")}
+WHERE feature_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+  AND (
+    feature_date IS NULL
+    OR customer_id IS NULL
+    OR rolling_order_count < 0
+    OR rolling_gross_spend < 0
+    OR rolling_net_spend < 0
+    OR days_since_last_order < 0
+  )

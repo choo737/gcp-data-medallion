@@ -64,6 +64,7 @@ Choose your late-arriving CDC replay window and Gold project layout.
 | Lookback window | Quarterly backfill | `cdc_lookback_days: "90"` | Higher merge scan bytes; 90-day late CDC replay tolerance |
 | Gold layout | Single Gold project | `gold_project`, `gold_dataset`; `gold_retail_project: ""` | Simplest IAM and single Dataform repository |
 | Gold layout | Multi-project domain mesh | Set `gold_retail_project` and `gold_retail_dataset` | Isolates Retail marts; see `.agents/skills/split-domain-mesh/SKILL.md` for more domains |
+| XAI audit ledger | Regulated ML telemetry | Set `ml_audit_project` and `ml_audit_dataset` | Links `ml_xai_audit_ledger` from `choo737/gcp-data-science` and `03-data-science` |
 
 Keep `cdc_lookback_days` between `1` and `3650` so `includes/cdc_helpers.js` validation passes.
 
