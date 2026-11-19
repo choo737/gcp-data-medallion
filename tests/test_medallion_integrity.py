@@ -68,6 +68,7 @@ REQUIRED_FILES = (
     "definitions/02_silver/assert_fct_orders_quality.sqlx",
     "definitions/02_silver/dim_customers.sqlx",
     "definitions/02_silver/ml_customer_features.sqlx",
+    "definitions/02_silver/vw_ml_customer_features_online.sqlx",
     "definitions/02_silver/assert_ml_customer_features_quality.sqlx",
     "definitions/02_silver/assert_xai_shap_additivity.sqlx",
     "definitions/03_gold/finance/mart_daily_revenue.sqlx",
@@ -951,6 +952,41 @@ assert(mlFeaturesAssertRes.sql.includes("feature_timestamp IS NULL"));
 assert(mlFeaturesAssertRes.sql.includes("tenure_months < 0"));
 assert(mlFeaturesAssertRes.sql.includes("cancellation_rate_30d"));
 
+const mlFeaturesViewRes = evalSqlx("definitions/02_silver/vw_ml_customer_features_online.sqlx", {
+  silver_project: "p",
+  silver_dataset: "silver"
+}, false);
+assert.strictEqual(mlFeaturesViewRes.cfg.type, "view");
+assert.strictEqual(mlFeaturesViewRes.cfg.database, "p");
+assert.strictEqual(mlFeaturesViewRes.cfg.schema, "silver");
+assert.strictEqual(Object.keys(mlFeaturesViewRes.cfg.columns).length, 17);
+for (const expectedCol of [
+  "entity_id",
+  "feature_timestamp",
+  "feature_date",
+  "customer_id",
+  "segment",
+  "country_code",
+  "tenure_months",
+  "avg_monthly_spend",
+  "rolling_order_count",
+  "rolling_cancelled_count_30d",
+  "rolling_gross_spend",
+  "rolling_net_spend",
+  "cancellation_rate_30d",
+  "discount_utilization_ratio",
+  "days_since_last_order",
+  "ingested_at",
+  "record_hash"
+]) {
+  assert(expectedCol in mlFeaturesViewRes.cfg.columns, "Missing view column config: " + expectedCol);
+  assert(mlFeaturesViewRes.sql.includes(expectedCol), "Missing view column in SQL: " + expectedCol);
+}
+assert(!mlFeaturesViewRes.sql.includes("customer_email"));
+assert(!mlFeaturesViewRes.sql.includes("customer_ic_number"));
+assert(!("customer_email" in mlFeaturesViewRes.cfg.columns));
+assert(mlFeaturesViewRes.sql.includes("WHERE feature_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 730 DAY)"));
+
 const shapAssertRes = evalSqlx("definitions/02_silver/assert_xai_shap_additivity.sqlx", {
   silver_project: "p"
 }, false);
@@ -975,8 +1011,8 @@ assert(xaiDriftRes.sql.includes("prediction_jsd"));
         sqlx_files = sorted(definitions_dir.rglob("*.sqlx"))
         self.assertEqual(
             len(sqlx_files),
-            14,
-            "Expected 5 Bronze, 3 Silver tables, 3 Silver assertions, and 3 Gold SQLX files.",
+            15,
+            "Expected 5 Bronze, 3 Silver tables, 1 Silver view, 3 Silver assertions, and 3 Gold SQLX files.",
         )
 
         for sqlx_path in sqlx_files:
