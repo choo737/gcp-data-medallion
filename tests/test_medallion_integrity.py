@@ -912,12 +912,44 @@ const mlFeaturesRes = evalSqlx("definitions/02_silver/ml_customer_features.sqlx"
 assert.strictEqual(mlFeaturesRes.cfg.bigquery.partitionBy, "feature_date");
 assert.strictEqual(mlFeaturesRes.cfg.bigquery.requirePartitionFilter, true);
 assert.deepStrictEqual(Array.from(mlFeaturesRes.cfg.columns.customer_email.bigqueryPolicyTags), [maskedTag]);
+assert.strictEqual(Object.keys(mlFeaturesRes.cfg.columns).length, 18);
+for (const expectedCol of [
+  "feature_date",
+  "customer_id",
+  "entity_id",
+  "feature_timestamp",
+  "customer_email",
+  "segment",
+  "country_code",
+  "tenure_months",
+  "rolling_order_count",
+  "rolling_gross_spend",
+  "rolling_net_spend",
+  "avg_monthly_spend",
+  "rolling_cancelled_count_30d",
+  "cancellation_rate_30d",
+  "discount_utilization_ratio",
+  "days_since_last_order",
+  "ingested_at",
+  "record_hash"
+]) {
+  assert(expectedCol in mlFeaturesRes.cfg.columns, "Missing column config: " + expectedCol);
+}
+assert(mlFeaturesRes.sql.includes("TIMESTAMP_ADD(TIMESTAMP(r.feature_date), INTERVAL 86399 SECOND) AS feature_timestamp"));
+assert(mlFeaturesRes.sql.includes("CAST(r.customer_id AS STRING) AS entity_id"));
+assert(mlFeaturesRes.sql.includes("rolling_cancelled_count_30d"));
+assert(mlFeaturesRes.sql.includes("cancellation_rate_30d"));
+assert(mlFeaturesRes.sql.includes("discount_utilization_ratio"));
 assert(!mlFeaturesRes.sql.includes("customer_ic_number"));
 
 const mlFeaturesAssertRes = evalSqlx("definitions/02_silver/assert_ml_customer_features_quality.sqlx", {
   silver_project: "p"
 }, false);
 assert(mlFeaturesAssertRes.sql.includes("WHERE feature_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)"));
+assert(mlFeaturesAssertRes.sql.includes("entity_id IS NULL"));
+assert(mlFeaturesAssertRes.sql.includes("feature_timestamp IS NULL"));
+assert(mlFeaturesAssertRes.sql.includes("tenure_months < 0"));
+assert(mlFeaturesAssertRes.sql.includes("cancellation_rate_30d"));
 
 const shapAssertRes = evalSqlx("definitions/02_silver/assert_xai_shap_additivity.sqlx", {
   silver_project: "p"
@@ -1142,6 +1174,28 @@ assert(xaiDriftRes.sql.includes("prediction_jsd"));
         self.assertNotIn("customer_ic_number", ml_features)
         self.assertIn('policy_tags.piiColumnConfig("Customer email address.", "masked")', ml_features)
         self.assertIn("requirePartitionFilter: true", ml_features)
+        for feature_col in (
+            "entity_id",
+            "feature_timestamp",
+            "tenure_months",
+            "avg_monthly_spend",
+            "rolling_cancelled_count_30d",
+            "cancellation_rate_30d",
+            "discount_utilization_ratio",
+        ):
+            self.assertIn(feature_col, ml_features)
+
+        ml_features_assert = (
+            REPO_ROOT / "definitions/02_silver/assert_ml_customer_features_quality.sqlx"
+        ).read_text(encoding="utf-8")
+        for check_expr in (
+            "entity_id IS NULL",
+            "feature_timestamp IS NULL",
+            "tenure_months < 0",
+            "cancellation_rate_30d < 0",
+            "cancellation_rate_30d > 1",
+        ):
+            self.assertIn(check_expr, ml_features_assert)
 
         shap_assert = (REPO_ROOT / "definitions/02_silver/assert_xai_shap_additivity.sqlx").read_text(encoding="utf-8")
         self.assertIn("ABS((base_logit + shap_sum_logit) - raw_margin) > 0.00001 * GREATEST(1.0, ABS(raw_margin))", shap_assert)
