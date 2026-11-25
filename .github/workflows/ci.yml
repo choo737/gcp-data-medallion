@@ -1,0 +1,116 @@
+name: Medallion Integrity CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate workflow_settings.yaml
+        run: |
+          python3 - << 'EOF'
+          from pathlib import Path
+          from tests.test_medallion_integrity import REQUIRED_VARS, parse_workflow_settings
+
+          assert not Path("package.json").exists(), (
+              "package.json must not exist when dataformCoreVersion is set in workflow_settings.yaml"
+          )
+
+          wf = parse_workflow_settings(Path("workflow_settings.yaml").read_text(encoding="utf-8"))
+          assert wf["dataformCoreVersion"] == "3.1.5"
+          for key in REQUIRED_VARS:
+              assert key in wf["vars"], f"Missing var {key}"
+          print("Schema checks passed.")
+          EOF
+
+      - name: Run Node JS helper checks
+        run: |
+          node - << 'EOF'
+          const assert = require("assert");
+          const audit = require("./includes/audit_columns");
+          const cdc = require("./includes/cdc_helpers");
+          const policyTags = require("./includes/policy_tags");
+          const scd2 = require("./includes/scd_type2");
+
+          assert.strictEqual(audit.ingestedAtSql(), "CURRENT_TIMESTAMP()");
+          assert.strictEqual(
+            audit.recordHashSql(["order_id", "net_amount", "status"]),
+            "TO_HEX(SHA256(TO_JSON_STRING(STRUCT(order_id, net_amount, status))))"
+          );
+
+          global.dataform = { projectConfig: { vars: { pii_policy_tag: "", allow_untagged_pii: "true" } } };
+          assert.deepStrictEqual(policyTags.piiColumnConfig("Customer national ID"), {
+            description: "Customer national ID"
+          });
+
+          global.dataform = { projectConfig: { vars: { pii_policy_tag: "", allow_untagged_pii: "false" } } };
+          assert.throws(
+            () => policyTags.piiColumnConfig("Customer national ID"),
+            /pii_policy_tag is required/
+          );
+
+          const sampleTag = "projects/example-project/locations/asia-southeast1/taxonomies/111/policyTags/222";
+          const restrictedTag = "projects/example-project/locations/asia-southeast1/taxonomies/111/policyTags/333";
+          global.dataform = {
+            projectConfig: {
+              vars: {
+                pii_policy_tag: sampleTag,
+                pii_restricted_policy_tag: restrictedTag,
+                pii_masked_policy_tag: sampleTag,
+                allow_untagged_pii: "false"
+              }
+            }
+          };
+          assert.deepStrictEqual(policyTags.piiColumnConfig("Customer national ID"), {
+            description: "Customer national ID",
+            bigqueryPolicyTags: [sampleTag]
+          });
+          assert.deepStrictEqual(policyTags.piiRestrictedPolicyTag(), [restrictedTag]);
+          assert.deepStrictEqual(policyTags.piiMaskedPolicyTag(), [sampleTag]);
+          assert.deepStrictEqual(policyTags.piiPolicyTag(), [sampleTag]);
+
+          const scdSql = scd2.buildScd2Query({
+            sourceSql: "`example-bronze-project.bronze.crm_customers_cdc`",
+            naturalKey: "customer_id",
+            orderByColumn: ["_ingested_at", "_cdc_sequence_num"],
+            columns: ["customer_id", "segment", "_ingested_at"]
+          });
+          assert(scdSql.includes("AS valid_from"));
+          assert(scdSql.includes("AS valid_to"));
+          assert(scdSql.includes("AS is_current"));
+          assert(scdSql.includes("ORDER BY _ingested_at ASC, _cdc_sequence_num ASC"));
+
+          global.dataform = { projectConfig: { vars: { filter_cdc_deletes: "true", cdc_lookback_days: "30" } } };
+          assert.strictEqual(cdc.filterCdcDeletes(), true);
+          assert.strictEqual(cdc.lookbackDays(), 30);
+          assert.strictEqual(cdc.parseLookbackDays("14"), 14);
+          assert.strictEqual(cdc.activeCdcFilter(), "COALESCE(_metadata_deleted, FALSE) = FALSE");
+          assert.strictEqual(cdc.activeCdcFilter("src"), "COALESCE(src._metadata_deleted, FALSE) = FALSE");
+          assert.throws(() => cdc.activeCdcFilter("src; DROP TABLE x"), /Invalid SQL table alias/);
+          assert.throws(() => cdc.parseLookbackDays("3651"), /out of range/);
+
+          global.dataform = { projectConfig: { vars: { filter_cdc_deletes: "false" } } };
+          assert.strictEqual(cdc.filterCdcDeletes(), false);
+          assert.strictEqual(cdc.activeCdcFilter("src"), "TRUE");
+          console.log("Node JS helper checks passed.");
+          EOF
+
+      - name: Run medallion integrity tests
+        run: python3 -m unittest discover -s tests -v

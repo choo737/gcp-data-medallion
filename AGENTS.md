@@ -1,0 +1,48 @@
+# AGENTS.md
+
+This file defines repository rules for OpenAI Codex, Antigravity, Cursor, and Amp.
+
+## Medallion Layer Contract
+
+- **`definitions/01_bronze/`**: Use `type: "declaration"` only. Never define tables or views in Bronze. Document `_metadata_deleted` on CDC declarations.
+- **`definitions/02_silver/`**: Build conformed incremental or SCD Type 2 tables. Attach `policy_tags.piiRestrictedPolicyTag()` or `policy_tags.piiMaskedPolicyTag()` to PII columns. Filter CDC tombstones with `cdc_helpers.activeCdcFilter()`. Exclude restricted identity columns from `ml_customer_features`.
+- **Partitioned Assertions**: Never use inline `assertions` when `requirePartitionFilter: true` is enabled. Create a standalone `type: "assertion"` file pruned by partition date (`assert_fct_orders_quality`, `assert_ml_customer_features_quality`, `assert_xai_shap_additivity`).
+- **`definitions/03_gold/`**: Group marts by business domain (`finance/`, `retail/`, `mlops/`). Use incremental merges with `updatePartitionFilter` and partition filters driven by `cdc_helpers.lookbackDays()`. Define `assertions` on every mart.
+- **SQLX Hygiene**: Never use `SELECT *`. Project every column explicitly. Keep `config { ... }` braces balanced.
+
+## Reusable Helpers (`includes/`)
+
+- Use `audit_columns.ingestedAtSql()` and `audit_columns.recordHashSql(columns)` for Silver audit columns.
+- Use `cdc_helpers.parseLookbackDays(val)`, `cdc_helpers.lookbackDays()`, `cdc_helpers.deduplicateCdc(...)`, and `cdc_helpers.activeCdcFilter(alias)` for Bronze CDC processing.
+- Use `policy_tags.piiRestrictedPolicyTag(vars)` and `policy_tags.piiMaskedPolicyTag(vars)` for BigQuery Policy Tags (formerly Data Catalog) attachment.
+- Use `scd_type2.scd2PreviousHashSql(...)`, `scd_type2.scd2WindowColumnsSql(...)`, or `scd_type2.buildScd2Query(...)` for CDC history windows.
+
+## Onboarding and Skills
+
+1. **Skills**: Register and follow `.agents/skills/setup-data-medallion/SKILL.md`, `.agents/skills/add-medallion-model/SKILL.md`, and `.agents/skills/split-domain-mesh/SKILL.md`.
+2. **Documentation**: Read `docs/01-architecture-and-sqlx-reference.md` for SQLX contracts and `docs/02-enterprise-operationalization-guide.md` for Day-0 to Day-2 operations.
+3. **Questionnaire**: Walk customers through `QUESTIONNAIRE.md` before editing `workflow_settings.yaml` or gitignored `envs/{dev,uat,prod}.compilation.json`.
+4. **Standalone Brownfield**: Support existing BigQuery Bronze datasets directly by adapting `definitions/01_bronze/*.sqlx` declarations.
+5. **Launchpad Handoff**: Read optional gitignored `platform-context.json` from `https://github.com/choo737/gcp-launchpad` to prefill project and Policy Tag settings.
+
+## Cross-Repo Documentation Invariant
+
+- Keep `tests/suite_doc_contract.py` byte-identical across all five `choo737/gcp-*` repositories.
+- Run `gcp-launchpad/scripts/audit-suite-uniformity.py` before pushing shared doc or `Makefile` edits.
+- Never create `GEMINI.md` or `catalog.yaml`.
+
+## Security and Prose Rules
+
+- Never hardcode real GCP project IDs, org IDs, folder IDs, billing IDs, or developer LDAPs.
+- Use neutral placeholder values (`example-silver-project`, `example-org`).
+- Write short sentences (`<= 20` words) without decorative emojis, section symbols, or AI filler words.
+
+## Required Verification
+
+Run the hermetic test suite after every change.
+
+```bash
+make test
+```
+
+Workflows `dataform-dryrun.yml` and `dataform-promote.yml` use Dataform GA `v1` endpoints over OIDC WIF.

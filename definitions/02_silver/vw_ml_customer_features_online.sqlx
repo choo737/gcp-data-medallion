@@ -1,0 +1,46 @@
+config {
+  type: "view",
+  database: dataform.projectConfig.vars.silver_project,
+  schema: dataform.projectConfig.vars.silver_dataset,
+  description: "Non-PII online Feature Group view over ml_customer_features with built-in 730-day partition filter.",
+  columns: {
+    entity_id: "String entity identifier required by Agent Platform (formerly Vertex AI) Feature Group.",
+    feature_timestamp: "End-of-day UTC snapshot timestamp required for point-in-time feature serving.",
+    feature_date: "Point-in-time feature snapshot calendar date.",
+    customer_id: "Customer identifier.",
+    segment: "Customer loyalty or tier segment as of feature_date.",
+    country_code: "ISO 3166-1 alpha-2 country code as of feature_date.",
+    tenure_months: "Customer tenure in whole months as of feature_date.",
+    avg_monthly_spend: "Rolling 30-day net spend cast to FLOAT64 for governed ML feature serving.",
+    rolling_order_count: "Rolling 30-day non-cancelled order count.",
+    rolling_cancelled_count_30d: "Rolling 30-day cancelled order count.",
+    rolling_gross_spend: "Rolling 30-day gross order spend.",
+    rolling_net_spend: "Rolling 30-day net order spend.",
+    cancellation_rate_30d: "Rolling 30-day ratio of cancelled orders to total orders.",
+    discount_utilization_ratio: "Rolling 30-day ratio of discount value to gross spend.",
+    days_since_last_order: "Days elapsed since prior non-cancelled order.",
+    ingested_at: "Silver ingestion timestamp.",
+    record_hash: "SHA-256 hash of governed ML feature attributes."
+  }
+}
+
+SELECT
+  entity_id,
+  feature_timestamp,
+  feature_date,
+  customer_id,
+  segment,
+  country_code,
+  tenure_months,
+  avg_monthly_spend,
+  rolling_order_count,
+  rolling_cancelled_count_30d,
+  rolling_gross_spend,
+  rolling_net_spend,
+  cancellation_rate_30d,
+  discount_utilization_ratio,
+  days_since_last_order,
+  ingested_at,
+  record_hash
+FROM ${ref("ml_customer_features")}
+WHERE feature_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 730 DAY)

@@ -1,0 +1,50 @@
+config {
+  type: "assertion",
+  database: dataform.projectConfig.vars.silver_project,
+  description: "Partition-pruned quality check for ml_customer_features ensuring non-null keys and non-negative metrics."
+}
+
+SELECT
+  feature_date,
+  customer_id,
+  entity_id,
+  feature_timestamp,
+  tenure_months,
+  rolling_order_count,
+  rolling_gross_spend,
+  rolling_net_spend,
+  avg_monthly_spend,
+  rolling_cancelled_count_30d,
+  cancellation_rate_30d,
+  discount_utilization_ratio,
+  days_since_last_order
+FROM ${ref("ml_customer_features")}
+WHERE feature_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+  AND (
+    feature_date IS NULL
+    OR customer_id IS NULL
+    OR entity_id IS NULL
+    OR feature_timestamp IS NULL
+    OR tenure_months IS NULL
+    OR tenure_months < 0
+    OR rolling_order_count IS NULL
+    OR rolling_order_count < 0
+    OR rolling_gross_spend IS NULL
+    OR rolling_gross_spend < 0
+    OR rolling_net_spend IS NULL
+    OR rolling_net_spend < 0
+    OR avg_monthly_spend IS NULL
+    OR IS_NAN(avg_monthly_spend)
+    OR avg_monthly_spend < 0
+    OR rolling_cancelled_count_30d IS NULL
+    OR rolling_cancelled_count_30d < 0
+    OR cancellation_rate_30d IS NULL
+    OR IS_NAN(cancellation_rate_30d)
+    OR cancellation_rate_30d < 0
+    OR cancellation_rate_30d > 1
+    OR discount_utilization_ratio IS NULL
+    OR IS_NAN(discount_utilization_ratio)
+    OR discount_utilization_ratio < 0
+    OR days_since_last_order IS NULL
+    OR days_since_last_order < 0
+  )

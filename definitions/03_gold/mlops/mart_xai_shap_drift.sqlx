@@ -1,0 +1,262 @@
+config {
+  type: "incremental",
+  database: dataform.projectConfig.vars.gold_project,
+  schema: dataform.projectConfig.vars.gold_dataset,
+  disabled: !ml_helpers.hasMlAuditLedger(),
+  uniqueKey: ["decision_date", "model_id", "explained_class"],
+  description: "Daily MLOps XAI attribution and probability drift mart tracking L-infinity shifts and Jensen-Shannon divergence.",
+  bigquery: {
+    partitionBy: "decision_date",
+    clusterBy: ["model_id", "explained_class"],
+    updatePartitionFilter: "decision_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)"
+  },
+  assertions: {
+    nonNull: ["decision_date", "model_id", "explained_class", "prediction_count"],
+    uniqueKey: ["decision_date", "model_id", "explained_class"]
+  },
+  columns: {
+    decision_date: "UTC decision calendar date.",
+    model_id: "Registered Agent Platform (formerly Vertex AI) model identifier.",
+    explained_class: "Target class label explained by SHAP logits.",
+    prediction_count: "Total scored decisions emitted for the model and class.",
+    mean_approve_prob: "Daily mean positive class probability.",
+    mean_abs_shap_sum: "Daily mean absolute SHAP logit attribution sum.",
+    max_abs_attribution_shift: "L-infinity absolute attribution shift versus 30-day baseline.",
+    prediction_jsd: "Jensen-Shannon divergence of 10-bucket prediction probabilities versus 30-day baseline."
+  }
+}
+
+WITH windowed_ledger AS (
+  SELECT
+    DATE(decision_timestamp) AS decision_date,
+    model_id,
+    explained_class,
+    approve_prob,
+    ABS(shap_sum_logit) AS abs_shap_sum,
+    shap_logit_map,
+    CAST(FLOOR(LEAST(GREATEST(approve_prob, 0.0), 0.999999) * 10) AS INT64) AS prob_bucket
+  FROM ${ref("ml_xai_audit_ledger")}
+  WHERE ${when(
+    incremental(),
+    "decision_timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL " + (cdc_helpers.lookbackDays() + 30) + " DAY))",
+    "decision_timestamp >= TIMESTAMP('1970-01-01')"
+  )}
+),
+daily_summary AS (
+  SELECT
+    decision_date,
+    model_id,
+    explained_class,
+    COUNT(*) AS prediction_count,
+    AVG(approve_prob) AS mean_approve_prob,
+    AVG(abs_shap_sum) AS mean_abs_shap_sum
+  FROM windowed_ledger
+  WHERE ${when(
+    incremental(),
+    "decision_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)",
+    "decision_date >= DATE('1970-01-01')"
+  )}
+  GROUP BY
+    decision_date,
+    model_id,
+    explained_class
+),
+baseline_summary AS (
+  SELECT
+    d.decision_date,
+    d.model_id,
+    d.explained_class,
+    AVG(w.approve_prob) AS baseline_mean_approve_prob,
+    AVG(w.abs_shap_sum) AS baseline_mean_abs_shap_sum,
+    COUNT(*) AS baseline_count
+  FROM daily_summary AS d
+  INNER JOIN windowed_ledger AS w
+    ON w.model_id = d.model_id
+    AND w.explained_class = d.explained_class
+    AND w.decision_date >= DATE_SUB(d.decision_date, INTERVAL 30 DAY)
+    AND w.decision_date < d.decision_date
+  GROUP BY
+    d.decision_date,
+    d.model_id,
+    d.explained_class
+),
+daily_feature_shap AS (
+  SELECT
+    w.decision_date,
+    w.model_id,
+    w.explained_class,
+    feature_key,
+    AVG(LAX_FLOAT64(w.shap_logit_map[feature_key])) AS daily_mean_feature_shap
+  FROM windowed_ledger AS w
+  CROSS JOIN UNNEST(IFNULL(JSON_KEYS(w.shap_logit_map, 1), [])) AS feature_key
+  WHERE ${when(
+    incremental(),
+    "w.decision_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)",
+    "w.decision_date >= DATE('1970-01-01')"
+  )}
+  GROUP BY
+    w.decision_date,
+    w.model_id,
+    w.explained_class,
+    feature_key
+),
+baseline_feature_shap AS (
+  SELECT
+    d.decision_date,
+    d.model_id,
+    d.explained_class,
+    feature_key,
+    AVG(LAX_FLOAT64(w.shap_logit_map[feature_key])) AS baseline_mean_feature_shap
+  FROM daily_summary AS d
+  INNER JOIN windowed_ledger AS w
+    ON w.model_id = d.model_id
+    AND w.explained_class = d.explained_class
+    AND w.decision_date >= DATE_SUB(d.decision_date, INTERVAL 30 DAY)
+    AND w.decision_date < d.decision_date
+  CROSS JOIN UNNEST(IFNULL(JSON_KEYS(w.shap_logit_map, 1), [])) AS feature_key
+  GROUP BY
+    d.decision_date,
+    d.model_id,
+    d.explained_class,
+    feature_key
+),
+feature_attribution_shift AS (
+  SELECT
+    COALESCE(df.decision_date, bf.decision_date) AS decision_date,
+    COALESCE(df.model_id, bf.model_id) AS model_id,
+    COALESCE(df.explained_class, bf.explained_class) AS explained_class,
+    MAX(
+      ABS(
+        COALESCE(df.daily_mean_feature_shap, 0.0) -
+        COALESCE(bf.baseline_mean_feature_shap, df.daily_mean_feature_shap, 0.0)
+      )
+    ) AS l_inf_attribution_shift
+  FROM daily_feature_shap AS df
+  FULL OUTER JOIN baseline_feature_shap AS bf
+    ON df.decision_date = bf.decision_date
+    AND df.model_id = bf.model_id
+    AND df.explained_class = bf.explained_class
+    AND df.feature_key = bf.feature_key
+  GROUP BY
+    decision_date,
+    model_id,
+    explained_class
+),
+daily_buckets AS (
+  SELECT
+    decision_date,
+    model_id,
+    explained_class,
+    prob_bucket,
+    COUNT(*) AS bucket_count
+  FROM windowed_ledger
+  WHERE ${when(
+    incremental(),
+    "decision_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)",
+    "decision_date >= DATE('1970-01-01')"
+  )}
+  GROUP BY
+    decision_date,
+    model_id,
+    explained_class,
+    prob_bucket
+),
+baseline_buckets AS (
+  SELECT
+    d.decision_date,
+    d.model_id,
+    d.explained_class,
+    w.prob_bucket,
+    COUNT(*) AS bucket_count
+  FROM daily_summary AS d
+  INNER JOIN windowed_ledger AS w
+    ON w.model_id = d.model_id
+    AND w.explained_class = d.explained_class
+    AND w.decision_date >= DATE_SUB(d.decision_date, INTERVAL 30 DAY)
+    AND w.decision_date < d.decision_date
+  GROUP BY
+    d.decision_date,
+    d.model_id,
+    d.explained_class,
+    w.prob_bucket
+),
+bucket_grid AS (
+  SELECT
+    d.decision_date,
+    d.model_id,
+    d.explained_class,
+    bucket_id
+  FROM daily_summary AS d
+  CROSS JOIN UNNEST(GENERATE_ARRAY(0, 9)) AS bucket_id
+),
+bucket_divergence AS (
+  SELECT
+    g.decision_date,
+    g.model_id,
+    g.explained_class,
+    SAFE_DIVIDE(COALESCE(db.bucket_count, 0), d.prediction_count) AS p_b,
+    SAFE_DIVIDE(COALESCE(bb.bucket_count, 0), b.baseline_count) AS q_b
+  FROM bucket_grid AS g
+  INNER JOIN daily_summary AS d
+    ON g.decision_date = d.decision_date
+    AND g.model_id = d.model_id
+    AND g.explained_class = d.explained_class
+  LEFT JOIN baseline_summary AS b
+    ON g.decision_date = b.decision_date
+    AND g.model_id = b.model_id
+    AND g.explained_class = b.explained_class
+  LEFT JOIN daily_buckets AS db
+    ON g.decision_date = db.decision_date
+    AND g.model_id = db.model_id
+    AND g.explained_class = db.explained_class
+    AND g.bucket_id = db.prob_bucket
+  LEFT JOIN baseline_buckets AS bb
+    ON g.decision_date = bb.decision_date
+    AND g.model_id = bb.model_id
+    AND g.explained_class = bb.explained_class
+    AND g.bucket_id = bb.prob_bucket
+),
+jsd_per_day AS (
+  SELECT
+    decision_date,
+    model_id,
+    explained_class,
+    COALESCE(
+      0.5 * SUM(
+        IF(p_b > 0 AND (p_b + COALESCE(q_b, p_b)) > 0, p_b * LN(p_b / (0.5 * (p_b + COALESCE(q_b, p_b)))), 0.0) +
+        IF(COALESCE(q_b, p_b) > 0 AND (p_b + COALESCE(q_b, p_b)) > 0, COALESCE(q_b, p_b) * LN(COALESCE(q_b, p_b) / (0.5 * (p_b + COALESCE(q_b, p_b)))), 0.0)
+      ),
+      0.0
+    ) AS prediction_jsd
+  FROM bucket_divergence
+  GROUP BY
+    decision_date,
+    model_id,
+    explained_class
+)
+
+SELECT
+  d.decision_date,
+  d.model_id,
+  d.explained_class,
+  d.prediction_count,
+  d.mean_approve_prob,
+  d.mean_abs_shap_sum,
+  COALESCE(
+    f.l_inf_attribution_shift,
+    ABS(d.mean_abs_shap_sum - COALESCE(b.baseline_mean_abs_shap_sum, d.mean_abs_shap_sum))
+  ) AS max_abs_attribution_shift,
+  j.prediction_jsd
+FROM daily_summary AS d
+LEFT JOIN baseline_summary AS b
+  ON d.decision_date = b.decision_date
+  AND d.model_id = b.model_id
+  AND d.explained_class = b.explained_class
+LEFT JOIN feature_attribution_shift AS f
+  ON d.decision_date = f.decision_date
+  AND d.model_id = f.model_id
+  AND d.explained_class = f.explained_class
+INNER JOIN jsd_per_day AS j
+  ON d.decision_date = j.decision_date
+  AND d.model_id = j.model_id
+  AND d.explained_class = j.explained_class

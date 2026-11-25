@@ -1,0 +1,24 @@
+defaultProject: example-silver-project
+defaultLocation: asia-southeast1
+defaultDataset: silver
+defaultAssertionDataset: silver_assertions
+dataformCoreVersion: 3.1.5
+vars:
+  bronze_project: your-bronze-project-id
+  bronze_dataset: bronze
+  silver_project: example-silver-project
+  silver_dataset: silver
+  gold_project: example-gold-project
+  gold_dataset: gold
+  gold_retail_project: ""
+  gold_retail_dataset: ""
+  pii_policy_tag: ""
+  pii_restricted_policy_tag: ""
+  pii_masked_policy_tag: ""
+  allow_untagged_pii: "true"
+  filter_cdc_deletes: "true"
+  cdc_lookback_days: "30"
+  include_stream_orders: "false"
+  include_batch_orders: "false"
+  ml_audit_project: example-ml-ops
+  ml_audit_dataset: ml_xai_audit

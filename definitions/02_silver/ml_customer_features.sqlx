@@ -1,0 +1,221 @@
+config {
+  type: "incremental",
+  database: dataform.projectConfig.vars.silver_project,
+  schema: dataform.projectConfig.vars.silver_dataset,
+  uniqueKey: ["feature_date", "customer_id"],
+  description: "Governed point-in-time customer ML features excluding restricted identity columns.",
+  bigquery: {
+    partitionBy: "feature_date",
+    clusterBy: ["customer_id"],
+    requirePartitionFilter: true,
+    updatePartitionFilter: "feature_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)"
+  },
+  columns: {
+    feature_date: "Point-in-time feature snapshot calendar date.",
+    customer_id: "Customer identifier.",
+    entity_id: "String entity identifier required by ML.FEATURES_AT_TIME, ML.ENTITY_FEATURES_AT_TIME, and Agent Platform (formerly Vertex AI) Feature Group.",
+    feature_timestamp: "End-of-day UTC snapshot timestamp required for point-in-time feature lookups.",
+    customer_email: policy_tags.piiColumnConfig("Customer email address.", "masked"),
+    segment: "Customer loyalty or tier segment as of feature_date.",
+    country_code: "ISO 3166-1 alpha-2 country code as of feature_date.",
+    tenure_months: "Customer tenure in whole months as of feature_date.",
+    rolling_order_count: "Rolling 30-day non-cancelled order count.",
+    rolling_gross_spend: "Rolling 30-day gross order spend.",
+    rolling_net_spend: "Rolling 30-day net order spend.",
+    avg_monthly_spend: "Rolling 30-day net spend cast to FLOAT64 for governed ML feature serving.",
+    rolling_cancelled_count_30d: "Rolling 30-day cancelled order count.",
+    cancellation_rate_30d: "Rolling 30-day ratio of cancelled orders to total orders.",
+    discount_utilization_ratio: "Rolling 30-day ratio of discount value to gross spend.",
+    days_since_last_order: "Days elapsed since prior non-cancelled order.",
+    ingested_at: "Silver ingestion timestamp.",
+    record_hash: "SHA-256 hash of governed ML feature attributes."
+  }
+}
+
+WITH scoped_orders AS (
+  SELECT
+    order_id,
+    customer_id,
+    order_date,
+    order_status,
+    gross_amount,
+    net_amount
+  FROM ${ref("fct_orders")}
+  WHERE ${when(
+    incremental(),
+    "order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + (cdc_helpers.lookbackDays() + 30) + " DAY)",
+    "order_date >= DATE('1970-01-01')"
+  )}
+    AND customer_id IS NOT NULL
+),
+daily_customer_activity AS (
+  SELECT
+    order_date AS feature_date,
+    customer_id,
+    COUNTIF(COALESCE(order_status, '') != 'CANCELLED') AS daily_order_count,
+    COUNTIF(COALESCE(order_status, '') = 'CANCELLED') AS daily_cancelled_count,
+    SUM(IF(COALESCE(order_status, '') != 'CANCELLED', COALESCE(gross_amount, 0), 0)) AS daily_gross_spend,
+    SUM(IF(COALESCE(order_status, '') != 'CANCELLED', COALESCE(net_amount, 0), 0)) AS daily_net_spend,
+    MAX(IF(COALESCE(order_status, '') != 'CANCELLED', order_date, NULL)) AS daily_active_order_date
+  FROM scoped_orders
+  GROUP BY
+    order_date,
+    customer_id
+)${when(
+  incremental(),
+  ",\nprior_order_dates AS (\n" +
+  "  SELECT\n" +
+  "    customer_id,\n" +
+  "    MAX(order_date) AS prior_order_date\n" +
+  "  FROM " + ref("fct_orders") + "\n" +
+  "  WHERE order_date >= DATE('1970-01-01')\n" +
+  "    AND order_date < DATE_SUB(CURRENT_DATE(), INTERVAL " + (cdc_helpers.lookbackDays() + 30) + " DAY)\n" +
+  "    AND customer_id IS NOT NULL\n" +
+  "    AND COALESCE(order_status, '') != 'CANCELLED'\n" +
+  "  GROUP BY customer_id\n" +
+  ")"
+)},
+daily_with_prev_order AS (
+  SELECT
+    d.feature_date,
+    d.customer_id,
+    d.daily_order_count,
+    d.daily_cancelled_count,
+    d.daily_gross_spend,
+    d.daily_net_spend,
+    ${when(
+      incremental(),
+      "COALESCE(\n" +
+      "      LAST_VALUE(d.daily_active_order_date IGNORE NULLS) OVER (\n" +
+      "        PARTITION BY d.customer_id\n" +
+      "        ORDER BY d.feature_date ASC\n" +
+      "        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING\n" +
+      "      ),\n" +
+      "      p.prior_order_date\n" +
+      "    ) AS prev_order_date",
+      "LAST_VALUE(d.daily_active_order_date IGNORE NULLS) OVER (\n" +
+      "      PARTITION BY d.customer_id\n" +
+      "      ORDER BY d.feature_date ASC\n" +
+      "      ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING\n" +
+      "    ) AS prev_order_date"
+    )}
+  FROM daily_customer_activity AS d
+  ${when(
+    incremental(),
+    "LEFT JOIN prior_order_dates AS p\n    ON d.customer_id = p.customer_id"
+  )}
+),
+rolling_features AS (
+  SELECT
+    feature_date,
+    customer_id,
+    SUM(daily_order_count) OVER (
+      PARTITION BY customer_id
+      ORDER BY UNIX_DATE(feature_date)
+      RANGE BETWEEN 29 PRECEDING AND CURRENT ROW
+    ) AS rolling_order_count,
+    SUM(daily_cancelled_count) OVER (
+      PARTITION BY customer_id
+      ORDER BY UNIX_DATE(feature_date)
+      RANGE BETWEEN 29 PRECEDING AND CURRENT ROW
+    ) AS rolling_cancelled_count,
+    SUM(daily_gross_spend) OVER (
+      PARTITION BY customer_id
+      ORDER BY UNIX_DATE(feature_date)
+      RANGE BETWEEN 29 PRECEDING AND CURRENT ROW
+    ) AS rolling_gross_spend,
+    SUM(daily_net_spend) OVER (
+      PARTITION BY customer_id
+      ORDER BY UNIX_DATE(feature_date)
+      RANGE BETWEEN 29 PRECEDING AND CURRENT ROW
+    ) AS rolling_net_spend,
+    COALESCE(DATE_DIFF(feature_date, prev_order_date, DAY), 9999) AS days_since_last_order
+  FROM daily_with_prev_order
+),
+customer_first_seen AS (
+  SELECT
+    customer_id,
+    MIN(valid_from) AS first_valid_from
+  FROM ${ref("dim_customers")}
+  GROUP BY customer_id
+),
+joined_features AS (
+  SELECT
+    r.feature_date,
+    r.customer_id,
+    CAST(r.customer_id AS STRING) AS entity_id,
+    TIMESTAMP_ADD(TIMESTAMP(r.feature_date), INTERVAL 86399 SECOND) AS feature_timestamp,
+    c.customer_email,
+    c.segment,
+    c.country_code,
+    CAST(GREATEST(DATE_DIFF(r.feature_date, DATE(cfs.first_valid_from), MONTH), 0) AS INT64) AS tenure_months,
+    r.rolling_order_count,
+    r.rolling_gross_spend,
+    r.rolling_net_spend,
+    CAST(r.rolling_net_spend AS FLOAT64) AS avg_monthly_spend,
+    CAST(r.rolling_cancelled_count AS INT64) AS rolling_cancelled_count_30d,
+    COALESCE(
+      SAFE_DIVIDE(
+        CAST(r.rolling_cancelled_count AS FLOAT64),
+        NULLIF(CAST(r.rolling_order_count + r.rolling_cancelled_count AS FLOAT64), 0.0)
+      ),
+      0.0
+    ) AS cancellation_rate_30d,
+    COALESCE(
+      SAFE_DIVIDE(
+        CAST(r.rolling_gross_spend - r.rolling_net_spend AS FLOAT64),
+        NULLIF(CAST(r.rolling_gross_spend AS FLOAT64), 0.0)
+      ),
+      0.0
+    ) AS discount_utilization_ratio,
+    r.days_since_last_order
+  FROM rolling_features AS r
+  INNER JOIN ${ref("dim_customers")} AS c
+    ON r.customer_id = c.customer_id
+    AND TIMESTAMP_ADD(TIMESTAMP(r.feature_date), INTERVAL 86399 SECOND) >= c.valid_from
+    AND TIMESTAMP_ADD(TIMESTAMP(r.feature_date), INTERVAL 86399 SECOND) < c.valid_to
+  INNER JOIN customer_first_seen AS cfs
+    ON r.customer_id = cfs.customer_id
+  WHERE ${when(
+    incremental(),
+    "r.feature_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)",
+    "r.feature_date >= DATE('1970-01-01')"
+  )}
+)
+
+SELECT
+  feature_date,
+  customer_id,
+  entity_id,
+  feature_timestamp,
+  customer_email,
+  segment,
+  country_code,
+  tenure_months,
+  rolling_order_count,
+  rolling_gross_spend,
+  rolling_net_spend,
+  avg_monthly_spend,
+  rolling_cancelled_count_30d,
+  cancellation_rate_30d,
+  discount_utilization_ratio,
+  days_since_last_order,
+  ${audit_columns.ingestedAtSql()} AS ingested_at,
+  ${audit_columns.recordHashSql([
+    "feature_date",
+    "customer_id",
+    "entity_id",
+    "feature_timestamp",
+    "segment",
+    "country_code",
+    "tenure_months",
+    "rolling_order_count",
+    "rolling_gross_spend",
+    "rolling_net_spend",
+    "avg_monthly_spend",
+    "rolling_cancelled_count_30d",
+    "cancellation_rate_30d",
+    "discount_utilization_ratio",
+    "days_since_last_order"
+  ])} AS record_hash
+FROM joined_features

@@ -1,0 +1,182 @@
+config {
+  type: "incremental",
+  database: dataform.projectConfig.vars.silver_project,
+  schema: dataform.projectConfig.vars.silver_dataset,
+  uniqueKey: ["order_id"],
+  description: "Deduplicated POS orders conformed from CDC, stream, and batch Bronze sources.",
+  bigquery: {
+    partitionBy: "order_date",
+    clusterBy: ["customer_id", "currency_code"],
+    requirePartitionFilter: true,
+    // Keep updatePartitionFilter aligned with the incremental WHERE window so late CDC events overwrite instead of duplicating order_id.
+    updatePartitionFilter: "order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)"
+  },
+  columns: {
+    order_id: "Unique POS order identifier.",
+    customer_id: "Customer identifier.",
+    customer_email: {
+      description: "Customer email address.",
+      bigqueryPolicyTags: policy_tags.piiMaskedPolicyTag()
+    },
+    customer_ic_number: {
+      description: "Customer national ID number.",
+      bigqueryPolicyTags: policy_tags.piiRestrictedPolicyTag()
+    },
+    store_id: "Retail store identifier.",
+    order_status: "Latest order lifecycle status.",
+    order_date: "Order calendar date used for partitioning.",
+    gross_amount: "Gross order amount before discounts.",
+    discount_amount: "Total discount applied to order.",
+    tax_amount: "Total tax applied to order.",
+    net_amount: "Net order amount after discounts.",
+    currency_code: "ISO 4217 currency code.",
+    _ingested_at: "Canonical Bronze ingestion timestamp.",
+    _cdc_sequence_num: "Monotonic CDC sequence number.",
+    _op_type: "Source write operation type.",
+    ingested_at: "Silver ingestion timestamp.",
+    record_hash: "SHA-256 hash of key order attributes."
+  }
+}
+
+-- Keep the incremental WHERE lookback identical to updatePartitionFilter so late CDC updates match target partitions and avoid duplicate order_id inserts.
+WITH unioned_orders AS (
+  SELECT
+    order_id,
+    customer_id,
+    customer_email,
+    customer_ic_number,
+    store_id,
+    order_status,
+    DATE(order_date) AS order_date,
+    gross_amount,
+    discount_amount,
+    tax_amount,
+    currency_code,
+    _ingested_at,
+    _cdc_sequence_num,
+    _op_type${when(cdc_helpers.filterCdcDeletes(), ", _metadata_deleted")}
+  FROM ${ref("pos_orders_cdc")}
+  ${when(
+    incremental(),
+    "WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)"
+  )}
+  ${dataform.projectConfig.vars.include_stream_orders === "true" ? (
+    "UNION ALL\n" +
+    "  SELECT\n" +
+    "    order_id,\n" +
+    "    customer_id,\n" +
+    "    customer_email,\n" +
+    "    customer_ic_number,\n" +
+    "    store_id,\n" +
+    "    order_status,\n" +
+    "    DATE(order_date) AS order_date,\n" +
+    "    gross_amount,\n" +
+    "    discount_amount,\n" +
+    "    tax_amount,\n" +
+    "    currency_code,\n" +
+    "    COALESCE(publish_time, CURRENT_TIMESTAMP()) AS _ingested_at,\n" +
+    "    UNIX_MICROS(COALESCE(publish_time, CURRENT_TIMESTAMP())) AS _cdc_sequence_num,\n" +
+    "    IF(subscription_name IS NOT NULL, 'STREAM', 'UPSERT') AS _op_type" +
+    (cdc_helpers.filterCdcDeletes() ? ", COALESCE(_metadata_deleted, FALSE) AS _metadata_deleted\n" : "\n") +
+    "  FROM " + ref("pos_orders_stream_cdc") + "\n" +
+    (incremental() ? "  WHERE publish_time >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY))\n    AND DATE(order_date) >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)" : "")
+  ) : ""}
+  ${dataform.projectConfig.vars.include_batch_orders === "true" ? (
+    "UNION ALL\n" +
+    "  SELECT\n" +
+    "    order_id,\n" +
+    "    customer_id,\n" +
+    "    customer_email,\n" +
+    "    customer_ic_number,\n" +
+    "    store_id,\n" +
+    "    order_status,\n" +
+    "    DATE(order_date) AS order_date,\n" +
+    "    gross_amount,\n" +
+    "    discount_amount,\n" +
+    "    tax_amount,\n" +
+    "    currency_code,\n" +
+    "    COALESCE(_ingested_at, CURRENT_TIMESTAMP()) AS _ingested_at,\n" +
+    "    COALESCE(_cdc_sequence_num, 0) AS _cdc_sequence_num,\n" +
+    "    COALESCE(_op_type, 'BATCH') AS _op_type" +
+    (cdc_helpers.filterCdcDeletes() ? ", COALESCE(_metadata_deleted, FALSE) AS _metadata_deleted\n" : "\n") +
+    "  FROM " + ref("pos_orders_batch_cdc") + "\n" +
+    (incremental() ? "  WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)" : "")
+  ) : ""}
+),
+latest_cdc AS (
+  SELECT
+    order_id,
+    customer_id,
+    customer_email,
+    customer_ic_number,
+    store_id,
+    order_status,
+    order_date,
+    gross_amount,
+    discount_amount,
+    tax_amount,
+    currency_code,
+    _ingested_at,
+    _cdc_sequence_num,
+    _op_type${when(cdc_helpers.filterCdcDeletes(), ", _metadata_deleted")}
+  FROM unioned_orders
+  WHERE order_id IS NOT NULL
+  ${cdc_helpers.deduplicateCdc(["order_id"], ["_ingested_at", "_cdc_sequence_num"])}
+)
+
+SELECT
+  order_id,
+  customer_id,
+  customer_email,
+  customer_ic_number,
+  store_id,
+  order_status,
+  order_date,
+  gross_amount,
+  discount_amount,
+  tax_amount,
+  COALESCE(gross_amount, 0) - COALESCE(discount_amount, 0) AS net_amount,
+  currency_code,
+  _ingested_at,
+  _cdc_sequence_num,
+  _op_type,
+  ${audit_columns.ingestedAtSql()} AS ingested_at,
+  ${audit_columns.recordHashSql(["order_id", "customer_id", "store_id", "order_status", "gross_amount", "discount_amount", "tax_amount", "currency_code"])} AS record_hash
+FROM latest_cdc
+WHERE ${cdc_helpers.activeCdcFilter()}
+  AND order_id IS NOT NULL
+
+post_operations {
+  ${when(
+    incremental() && cdc_helpers.filterCdcDeletes(),
+    "DELETE FROM " + self() + "\n" +
+    "WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)\n" +
+    "  AND order_id IN (\n" +
+    "    SELECT order_id\n" +
+    "    FROM (\n" +
+    "      SELECT order_id, _ingested_at, _cdc_sequence_num" + (cdc_helpers.filterCdcDeletes() ? ", _metadata_deleted" : "") + "\n" +
+    "      FROM (\n" +
+    "        SELECT order_id, _ingested_at, _cdc_sequence_num" + (cdc_helpers.filterCdcDeletes() ? ", _metadata_deleted" : "") + "\n" +
+    "        FROM " + ref("pos_orders_cdc") + "\n" +
+    "        WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)\n" +
+    (dataform.projectConfig.vars.include_stream_orders === "true" ? (
+      "        UNION ALL\n" +
+      "        SELECT order_id, COALESCE(publish_time, CURRENT_TIMESTAMP()) AS _ingested_at, UNIX_MICROS(COALESCE(publish_time, CURRENT_TIMESTAMP())) AS _cdc_sequence_num" + (cdc_helpers.filterCdcDeletes() ? ", COALESCE(_metadata_deleted, FALSE) AS _metadata_deleted" : "") + "\n" +
+      "        FROM " + ref("pos_orders_stream_cdc") + "\n" +
+      "        WHERE publish_time >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY))\n" +
+      "          AND DATE(order_date) >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)\n" +
+      "          AND order_id IS NOT NULL\n"
+    ) : "") +
+    (dataform.projectConfig.vars.include_batch_orders === "true" ? (
+      "        UNION ALL\n" +
+      "        SELECT order_id, COALESCE(_ingested_at, CURRENT_TIMESTAMP()) AS _ingested_at, COALESCE(_cdc_sequence_num, 0) AS _cdc_sequence_num" + (cdc_helpers.filterCdcDeletes() ? ", COALESCE(_metadata_deleted, FALSE) AS _metadata_deleted" : "") + "\n" +
+      "        FROM " + ref("pos_orders_batch_cdc") + "\n" +
+      "        WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL " + cdc_helpers.lookbackDays() + " DAY)\n"
+    ) : "") +
+    "      )\n" +
+    "      " + cdc_helpers.deduplicateCdc(["order_id"], ["_ingested_at", "_cdc_sequence_num"]) + "\n" +
+    "    )\n" +
+    "    WHERE " + (cdc_helpers.filterCdcDeletes() ? "COALESCE(_metadata_deleted, FALSE) = TRUE" : "FALSE") + "\n" +
+    "  );"
+  )}
+}

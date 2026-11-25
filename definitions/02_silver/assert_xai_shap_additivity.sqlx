@@ -1,0 +1,33 @@
+config {
+  type: "assertion",
+  database: dataform.projectConfig.vars.silver_project,
+  disabled: !ml_helpers.hasMlAuditLedger(),
+  description: "Partition-pruned SHAP logit additivity and provenance digest assertion on ml_xai_audit_ledger."
+}
+
+SELECT
+  decision_id,
+  model_id,
+  model_version_id,
+  decision_timestamp,
+  approve_prob,
+  raw_margin,
+  base_logit,
+  shap_sum_logit,
+  container_image_digest,
+  model_artifact_sha256
+FROM ${ref("ml_xai_audit_ledger")}
+WHERE decision_timestamp >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY))
+  AND (
+    approve_prob IS NULL
+    OR raw_margin IS NULL
+    OR base_logit IS NULL
+    OR shap_sum_logit IS NULL
+    OR IS_NAN(approve_prob)
+    OR IS_NAN(raw_margin)
+    OR IS_NAN(base_logit)
+    OR IS_NAN(shap_sum_logit)
+    OR ABS((base_logit + shap_sum_logit) - raw_margin) > 0.00001 * GREATEST(1.0, ABS(raw_margin))
+    OR TRIM(IFNULL(container_image_digest, '')) = ''
+    OR TRIM(IFNULL(model_artifact_sha256, '')) = ''
+  )
